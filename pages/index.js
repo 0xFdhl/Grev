@@ -1,18 +1,23 @@
+import Head from 'next/head';
+
 export default function Home() {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        fontFamily: 'system-ui, sans-serif',
-      }}
-    >
-      <h1>Reviu App</h1>
-      <p>Sistem redirect QR/NFC untuk Google Review.</p>
-      <a href="/admin">Masuk ke Dashboard Admin →</a>
-    </div>
+    <>
+      <Head>
+        <title>Reviu App</title>
+        <meta name='description' content='Sistem redirect QR/NFC untuk Google Review.' />
+      </Head>
+      <div className='center-page'>
+        <div className='card' style={{ maxWidth: 420, width: '100%' }}>
+          <h1 style={{ margin: '0 0 8px', fontSize: 28 }}>Reviu App</h1>
+          <p style={{ margin: '0 0 20px', color: 'var(--color-muted)' }}>
+            Sistem redirect QR/NFC untuk Google Review. Cepat, jelas, dan responsif di ponsel.
+          </p>
+          <a href='/admin' className='btn' style={{ width: '100%', textDecoration: 'none' }}>
+            Masuk ke Dashboard Admin
+          </a>
+        </div>
+      </div>
+    </>
   );
 }

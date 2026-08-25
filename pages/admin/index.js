@@ -1,15 +1,27 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import Head from 'next/head';
 import { useRouter } from 'next/router';
+
+const QUICK_COUNTS = [10, 25, 50, 100];
 
 export default function AdminDashboard() {
   const [token, setToken] = useState(null);
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
   const [msg, setMsg] = useState(null);
+
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ business_name: '', target_url: '' });
-  const [genCount, setGenCount] = useState(10);
+
   const [genPrefix, setGenPrefix] = useState('RV');
+  const [genCount, setGenCount] = useState(10);
+
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const [copiedCode, setCopiedCode] = useState(null);
+
   const router = useRouter();
 
   useEffect(() => {
@@ -21,6 +33,12 @@ export default function AdminDashboard() {
     }
   }, [router]);
 
+  useEffect(() => {
+    if (!msg) return;
+    const timer = setTimeout(() => setMsg(null), 4000);
+    return () => clearTimeout(timer);
+  }, [msg]);
+
   async function callApi(url, options = {}) {
     const res = await fetch(url, {
       ...options,
@@ -29,9 +47,7 @@ export default function AdminDashboard() {
     let data = null;
     try {
       data = await res.json();
-    } catch (_) {
-      // body bukan JSON (misal error HTML dari server)
-    }
+    } catch (_) {}
     if (!res.ok) {
       throw new Error((data && data.error) || `Request gagal (HTTP ${res.status})`);
     }
@@ -60,24 +76,50 @@ export default function AdminDashboard() {
     if (token) loadLinks(token);
   }, [token, loadLinks]);
 
-  async function handleGenerate() {
-    // Lanjutkan nomor hanya dari prefix yang sama, biar prefix berbeda
-    // tidak saling mengganggu penomoran
+  const stats = useMemo(() => {
+    const total = links.length;
+    const active = links.filter((l) => l.is_active).length;
+    const inactive = total - active;
+    const clicks = links.reduce((sum, l) => sum + (l.clicks || 0), 0);
+    return { total, active, inactive, clicks };
+  }, [links]);
+
+  const nextNumber = useMemo(() => {
     const nums = links
       .filter((l) => l.code.startsWith(genPrefix))
       .map((l) => parseInt(l.code.slice(genPrefix.length), 10) || 0);
-    const startFrom = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+    return nums.length > 0 ? Math.max(...nums) + 1 : 1;
+  }, [links, genPrefix]);
 
+  const filteredLinks = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return links.filter((l) => {
+      const matchesSearch =
+        !q ||
+        l.code.toLowerCase().includes(q) ||
+        (l.business_name && l.business_name.toLowerCase().includes(q));
+      const matchesStatus =
+        statusFilter === 'all' ||
+        (statusFilter === 'active' && l.is_active) ||
+        (statusFilter === 'inactive' && !l.is_active);
+      return matchesSearch && matchesStatus;
+    });
+  }, [links, search, statusFilter]);
+
+  async function handleGenerate() {
+    setGenerating(true);
     try {
       await callApi('/api/links', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prefix: genPrefix, count: Number(genCount), startFrom }),
+        body: JSON.stringify({ prefix: genPrefix, count: Number(genCount), startFrom: nextNumber }),
       });
       setMsg({ type: 'ok', text: `${genCount} kode ${genPrefix} berhasil dibuat.` });
       await loadLinks(token);
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -126,225 +168,327 @@ export default function AdminDashboard() {
     }
   }
 
+  function logout() {
+    sessionStorage.removeItem('reviu_admin_token');
+    router.push('/admin/login');
+  }
+
+  async function copyLink(code) {
+    const url = `${window.location.origin}/${code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedCode(code);
+      setTimeout(() => setCopiedCode((c) => (c === code ? null : c)), 1500);
+    } catch (_) {
+      setMsg({ type: 'error', text: 'Gagal menyalin link.' });
+    }
+  }
+
   if (!token) return null;
 
   return (
-    <div style={styles.page}>
-      <h1>Dashboard Reviu</h1>
+    <>
+      <Head>
+        <title>Dashboard Admin | Reviu</title>
+      </Head>
 
-      {msg && (
-        <div style={{ ...styles.msg, ...(msg.type === 'error' ? styles.msgError : styles.msgOk) }}>
-          {msg.text}
-        </div>
-      )}
-
-      <div style={styles.card}>
-        <h3>Generate kode baru (pre-cetak QR)</h3>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <label>
-            Prefix:{' '}
-            <input
-              value={genPrefix}
-              onChange={(e) => setGenPrefix(e.target.value.toUpperCase())}
-              style={{ ...styles.input, width: 80 }}
-            />
-          </label>
-          <label>
-            Jumlah:{' '}
-            <input
-              type="number"
-              value={genCount}
-              onChange={(e) => setGenCount(e.target.value)}
-              style={{ ...styles.input, width: 80 }}
-            />
-          </label>
-          <button onClick={handleGenerate} style={styles.button}>
-            Generate
+      <div className='container'>
+        <div className='row row--between' style={{ marginBottom: 20, alignItems: 'flex-start' }}>
+          <div>
+            <h1 style={{ margin: '0 0 4px', fontSize: 26 }}>Dashboard Reviu</h1>
+            <p style={{ margin: 0, color: 'var(--color-muted)', fontSize: 14 }}>
+              Kelola kode QR/NFC untuk Google Review.
+            </p>
+          </div>
+          <button onClick={logout} className='btn btn--secondary btn--small'>
+            Keluar
           </button>
         </div>
-        <p style={{ fontSize: 13, color: '#666', marginTop: 8 }}>
-          Kode baru otomatis lanjut dari nomor terakhir dengan prefix yang sama. Generate dulu
-          sebelum ada pelanggan, baru aktivasi belakangan.
-        </p>
-      </div>
 
-      <div style={styles.card}>
-        <h3>Daftar Kode ({links.length})</h3>
-        {loading ? (
-          <p>Memuat...</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Kode</th>
-                <th style={styles.th}>Status</th>
-                <th style={styles.th}>Nama Bisnis</th>
-                <th style={styles.th}>Link Tujuan</th>
-                <th style={styles.th}>Klik</th>
-                <th style={styles.th}>Aksi</th>
-              </tr>
-            </thead>
-            <tbody>
-              {links.map((link) => (
-                <tr key={link.id}>
-                  <td style={styles.td}>
-                    <code>{link.code}</code>
-                  </td>
-                  <td style={styles.td}>
-                    {link.is_active ? (
-                      <span style={{ color: 'green', fontWeight: 600 }}>Aktif</span>
-                    ) : (
-                      <span style={{ color: '#999' }}>Belum aktif</span>
-                    )}
-                  </td>
-                  {editingId === link.id ? (
-                    <>
-                      <td style={styles.td}>
-                        <input
-                          style={styles.input}
-                          value={editForm.business_name}
-                          onChange={(e) =>
-                            setEditForm({ ...editForm, business_name: e.target.value })
-                          }
-                          placeholder="Nama bisnis"
-                        />
-                      </td>
-                      <td style={styles.td}>
-                        <input
-                          style={{ ...styles.input, width: 220 }}
-                          value={editForm.target_url}
-                          onChange={(e) =>
-                            setEditForm({ ...editForm, target_url: e.target.value })
-                          }
-                          placeholder="Link Google Review"
-                        />
-                      </td>
-                      <td style={styles.td}>{link.clicks || 0}</td>
-                      <td style={styles.td}>
-                        <button onClick={() => saveActivation(link.id)} style={styles.buttonSmall}>
-                          Simpan
-                        </button>
-                        <button
-                          onClick={() => setEditingId(null)}
-                          style={{ ...styles.buttonSmall, background: '#999' }}
-                        >
-                          Batal
-                        </button>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td style={styles.td}>{link.business_name || '-'}</td>
-                      <td style={styles.td}>
-                        {link.target_url ? (
-                          <a href={link.target_url} target="_blank" rel="noreferrer">
-                            {link.target_url.slice(0, 30)}...
-                          </a>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td style={styles.td}>{link.clicks || 0}</td>
-                      <td style={styles.td}>
-                        <button onClick={() => startEdit(link)} style={styles.buttonSmall}>
-                          {link.is_active ? 'Edit' : 'Aktivasi'}
-                        </button>
-                        {link.is_active && (
-                          <button
-                            onClick={() => deactivate(link.id)}
-                            style={{ ...styles.buttonSmall, background: '#e67e22' }}
-                          >
-                            Nonaktifkan
-                          </button>
-                        )}
-                        <button
-                          onClick={() => removeCode(link.id)}
-                          style={{ ...styles.buttonSmall, background: '#c0392b' }}
-                        >
-                          Hapus
-                        </button>
-                      </td>
-                    </>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        {msg && <div className={`alert alert--${msg.type}`}>{msg.text}</div>}
+
+        {/* Statistik */}
+        <div className='row'>
+          <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL KODE</div>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.total}</div>
+          </div>
+          <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>AKTIF</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-success)' }}>{stats.active}</div>
+          </div>
+          <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>BELUM AKTIF</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-warning)' }}>{stats.inactive}</div>
+          </div>
+          <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
+            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL KLIK</div>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.clicks}</div>
+          </div>
+        </div>
+
+        {/* Generate */}
+        <div className='card'>
+          <h3 style={{ margin: '0 0 12px' }}>Generate kode baru (pre-cetak QR)</h3>
+          <div className='row' style={{ alignItems: 'flex-end' }}>
+            <div>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--color-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                PREFIX
+              </label>
+              <input
+                value={genPrefix}
+                onChange={(e) => setGenPrefix(e.target.value.toUpperCase())}
+                className='input'
+                style={{ width: 90, textTransform: 'uppercase' }}
+              />
+            </div>
+            <div>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--color-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                JUMLAH
+              </label>
+              <input
+                type='number'
+                min={1}
+                max={500}
+                value={genCount}
+                onChange={(e) => setGenCount(e.target.value)}
+                className='input'
+                style={{ width: 90 }}
+              />
+            </div>
+            <div className='grow'>
+              <div className='row' style={{ marginBottom: 6 }}>
+                {QUICK_COUNTS.map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setGenCount(n)}
+                    className='btn btn--secondary btn--small'
+                    style={{ padding: '6px 10px' }}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--color-muted)' }}>
+                Kode berikutnya:{' '}
+                <strong>
+                  {genPrefix}
+                  {String(nextNumber).padStart(4, '0')}
+                </strong>
+              </p>
+            </div>
+            <button onClick={handleGenerate} disabled={generating} className='btn'>
+              {generating ? 'Membuat...' : 'Generate'}
+            </button>
+          </div>
+        </div>
+
+        {/* Filter */}
+        <div className='card'>
+          <div className='row' style={{ alignItems: 'flex-end' }}>
+            <div className='grow'>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--color-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                CARI KODE / NAMA BISNIS
+              </label>
+              <input
+                type='text'
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder='Ketik RV0001 atau nama bisnis...'
+                className='input'
+              />
+            </div>
+            <div>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--color-muted)',
+                  marginBottom: 6,
+                }}
+              >
+                STATUS
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className='input'
+                style={{ width: 150, cursor: 'pointer' }}
+              >
+                <option value='all'>Semua</option>
+                <option value='active'>Aktif</option>
+                <option value='inactive'>Belum aktif</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Daftar kode */}
+        <div className='card'>
+          <div className='row row--between' style={{ marginBottom: 14, alignItems: 'center' }}>
+            <h3 style={{ margin: 0 }}>Daftar Kode ({filteredLinks.length})</h3>
+            <button onClick={() => loadLinks(token)} className='btn btn--secondary btn--small' disabled={loading}>
+              {loading ? 'Memuat...' : 'Refresh'}
+            </button>
+          </div>
+
+          {loading ? (
+            <p>Memuat...</p>
+          ) : filteredLinks.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--color-muted)' }}>
+              <p style={{ margin: 0, fontWeight: 600 }}>Tidak ada kode yang cocok.</p>
+              <p style={{ margin: '4px 0 0', fontSize: 14 }}>Coba ubah pencarian atau filter status.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className='data-table'>
+                <thead>
+                  <tr>
+                    <th>Kode</th>
+                    <th>Status</th>
+                    <th>Nama Bisnis</th>
+                    <th>Link Tujuan</th>
+                    <th>Klik</th>
+                    <th style={{ minWidth: 180 }}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredLinks.map((link) => (
+                    <tr key={link.id}>
+                      {editingId === link.id ? (
+                        <>
+                          <td data-label='Kode'>
+                            <code style={{ fontSize: 14, fontWeight: 600 }}>{link.code}</code>
+                          </td>
+                          <td data-label='Status'>
+                            <span className='badge badge--inactive'>Mengedit</span>
+                          </td>
+                          <td data-label='Nama Bisnis'>
+                            <input
+                              className='input'
+                              value={editForm.business_name}
+                              onChange={(e) => setEditForm({ ...editForm, business_name: e.target.value })}
+                              placeholder='Nama bisnis'
+                              style={{ minWidth: 140, textAlign: 'left' }}
+                            />
+                          </td>
+                          <td data-label='Link Tujuan'>
+                            <input
+                              className='input'
+                              value={editForm.target_url}
+                              onChange={(e) => setEditForm({ ...editForm, target_url: e.target.value })}
+                              placeholder='https://...'
+                              style={{ minWidth: 180, textAlign: 'left' }}
+                            />
+                          </td>
+                          <td data-label='Klik'>{link.clicks || 0}</td>
+                          <td data-label='Aksi'>
+                            <div className='row' style={{ justifyContent: 'flex-end' }}>
+                              <button onClick={() => saveActivation(link.id)} className='btn btn--success btn--small'>
+                                Simpan
+                              </button>
+                              <button onClick={() => setEditingId(null)} className='btn btn--secondary btn--small'>
+                                Batal
+                              </button>
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td data-label='Kode'>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <code style={{ fontSize: 14, fontWeight: 600 }}>{link.code}</code>
+                              <button
+                                onClick={() => copyLink(link.code)}
+                                className='btn btn--secondary btn--small'
+                                style={{ padding: '4px 8px', minHeight: 28, fontSize: 12 }}
+                              >
+                                {copiedCode === link.code ? 'Disalin!' : 'Salin link'}
+                              </button>
+                            </div>
+                          </td>
+                          <td data-label='Status'>
+                            {link.is_active ? (
+                              <span className='badge badge--active'>Aktif</span>
+                            ) : (
+                              <span className='badge badge--inactive'>Belum aktif</span>
+                            )}
+                          </td>
+                          <td data-label='Nama Bisnis' style={{ fontWeight: 500 }}>
+                            {link.business_name || '-'}
+                          </td>
+                          <td data-label='Link Tujuan'>
+                            {link.target_url ? (
+                              <a
+                                href={link.target_url}
+                                target='_blank'
+                                rel='noreferrer'
+                                style={{ color: '#2563eb', wordBreak: 'break-all' }}
+                              >
+                                {link.target_url.length > 32
+                                  ? `${link.target_url.slice(0, 32)}...`
+                                  : link.target_url}
+                              </a>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td data-label='Klik' style={{ fontWeight: 600 }}>
+                            {link.clicks || 0}
+                          </td>
+                          <td data-label='Aksi'>
+                            <div className='row' style={{ justifyContent: 'flex-end' }}>
+                              <button onClick={() => startEdit(link)} className='btn btn--small'>
+                                {link.is_active ? 'Edit' : 'Aktivasi'}
+                              </button>
+                              {link.is_active && (
+                                <button
+                                  onClick={() => deactivate(link.id)}
+                                  className='btn btn--warning btn--small'
+                                >
+                                  Nonaktifkan
+                                </button>
+                              )}
+                              <button onClick={() => removeCode(link.id)} className='btn btn--danger btn--small'>
+                                Hapus
+                              </button>
+                            </div>
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
-
-const styles = {
-  page: {
-    fontFamily: 'system-ui, sans-serif',
-    maxWidth: 1000,
-    margin: '0 auto',
-    padding: 24,
-  },
-  card: {
-    background: 'white',
-    border: '1px solid #eee',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 20,
-    boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
-  },
-  msg: {
-    padding: '10px 14px',
-    borderRadius: 8,
-    marginBottom: 16,
-    fontSize: 14,
-    fontWeight: 500,
-  },
-  msgOk: {
-    background: '#e8f7ee',
-    color: '#1a7f4b',
-    border: '1px solid #bfe8cf',
-  },
-  msgError: {
-    background: '#fdecea',
-    color: '#a93226',
-    border: '1px solid #f5c6c0',
-  },
-  input: {
-    padding: 8,
-    borderRadius: 6,
-    border: '1px solid #ddd',
-    fontSize: 14,
-  },
-  button: {
-    padding: '8px 16px',
-    background: '#111',
-    color: 'white',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-  buttonSmall: {
-    padding: '6px 10px',
-    marginRight: 6,
-    background: '#111',
-    color: 'white',
-    border: 'none',
-    borderRadius: 6,
-    cursor: 'pointer',
-    fontSize: 12,
-  },
-  table: {
-    width: '100%',
-    borderCollapse: 'collapse',
-    fontSize: 14,
-  },
-  th: {
-    textAlign: 'left',
-    borderBottom: '2px solid #eee',
-    padding: '8px 6px',
-  },
-  td: {
-    borderBottom: '1px solid #f2f2f2',
-    padding: '8px 6px',
-    verticalAlign: 'top',
-  },
-};
