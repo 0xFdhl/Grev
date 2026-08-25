@@ -1,87 +1,75 @@
 import { useState } from 'react';
+import Head from 'next/head';
 import { useRouter } from 'next/router';
 
 export default function Login() {
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
-    // Validasi password dengan mencoba hit API links (yang butuh auth)
-    const res = await fetch('/api/links', {
-      headers: { Authorization: `Bearer ${password}` },
-    });
+    try {
+      const res = await fetch('/api/links', {
+        headers: { Authorization: `Bearer ${password}` },
+      });
 
-    if (res.ok) {
-      // Simpan di sessionStorage browser (hilang kalau tab ditutup, cukup aman utk personal use)
-      sessionStorage.setItem('reviu_admin_token', password);
-      router.push('/admin');
-    } else if (res.status === 401) {
-      setError('Password salah.');
-    } else {
-      // Bukan soal password -> tampilkan pesan asli dari server (misal Supabase bermasalah)
-      const data = await res.json().catch(() => null);
-      setError((data && data.error) || 'Terjadi kesalahan di server. Coba lagi nanti.');
+      if (res.ok) {
+        sessionStorage.setItem('reviu_admin_token', password);
+        router.push('/admin');
+      } else if (res.status === 401) {
+        setError('Password salah.');
+        setLoading(false);
+      } else {
+        const data = await res.json().catch(() => null);
+        setError((data && data.error) || 'Terjadi kesalahan di server. Coba lagi nanti.');
+        setLoading(false);
+      }
+    } catch (err) {
+      setError('Tidak bisa terhubung ke server.');
+      setLoading(false);
     }
   }
 
   return (
-    <div style={styles.wrapper}>
-      <form onSubmit={handleSubmit} style={styles.form}>
-        <h1 style={{ marginBottom: 20 }}>Login Admin</h1>
-        <input
-          type="password"
-          placeholder="Password admin"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={styles.input}
-          autoFocus
-        />
-        <button type="submit" style={styles.button}>
-          Masuk
-        </button>
-        {error && <p style={{ color: 'red', marginTop: 10 }}>{error}</p>}
-      </form>
-    </div>
+    <>
+      <Head>
+        <title>Login Admin | Reviu</title>
+      </Head>
+      <div className="center-page" style={{ background: '#f3f4f6' }}>
+        <form
+          onSubmit={handleSubmit}
+          className="card"
+          style={{ width: '100%', maxWidth: 360, padding: 32 }}
+        >
+          <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Login Admin</h1>
+          <p style={{ margin: '0 0 20px', color: 'var(--color-muted)', fontSize: 14 }}>
+            Masukkan password untuk mengelola kode QR.
+          </p>
+          <input
+            type="password"
+            placeholder="Password admin"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="input"
+            style={{ marginBottom: 14 }}
+            autoFocus
+            required
+          />
+          <button type="submit" className="btn" disabled={loading} style={{ width: '100%' }}>
+            {loading ? 'Memeriksa...' : 'Masuk'}
+          </button>
+          {error && (
+            <div className="alert alert--error" style={{ marginTop: 14, marginBottom: 0 }}>
+              {error}
+            </div>
+          )}
+        </form>
+      </div>
+    </>
   );
 }
-
-const styles = {
-  wrapper: {
-    display: 'flex',
-    height: '100vh',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontFamily: 'system-ui, sans-serif',
-    background: '#f5f5f5',
-  },
-  form: {
-    background: 'white',
-    padding: 40,
-    borderRadius: 12,
-    boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
-    width: 320,
-  },
-  input: {
-    width: '100%',
-    padding: 10,
-    fontSize: 16,
-    border: '1px solid #ddd',
-    borderRadius: 8,
-    marginBottom: 12,
-    boxSizing: 'border-box',
-  },
-  button: {
-    width: '100%',
-    padding: 10,
-    fontSize: 16,
-    background: '#111',
-    color: 'white',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-  },
-};
