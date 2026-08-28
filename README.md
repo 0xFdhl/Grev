@@ -19,8 +19,8 @@ lalu aktivasi belakangan lewat dashboard admin tanpa perlu cetak ulang QR/acryli
 4. Buka menu **SQL Editor** (sidebar kiri) → **New query**
 5. Copy-paste isi file `supabase-schema.sql` dari project ini → klik **Run**
 6. Buka menu **Settings → API** (sidebar kiri bawah), catat 3 hal ini:
-   - **Project URL** → nanti jadi `NEXT_PUBLIC_SUPABASE_URL`
-   - **anon public key** → nanti jadi `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - **Project URL** → nanti jadi `SUPABASE_URL`
+   - **anon public key** → nanti jadi `SUPABASE_ANON_KEY` (saat ini tidak dipakai client)
    - **service_role key** (klik "reveal") → nanti jadi `SUPABASE_SERVICE_ROLE_KEY`
    ⚠️ **service_role key JANGAN pernah dibagikan ke siapa pun atau ditaruh di kode frontend** —
    key ini punya akses penuh ke database.
@@ -41,10 +41,17 @@ cp .env.example .env.local
 Buka file `.env.local`, isi dengan data dari Supabase tadi:
 
 ```
-NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxx
+SUPABASE_URL=https://xxxxxxxx.supabase.co
+SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxx
 SUPABASE_SERVICE_ROLE_KEY=xxxxxxxxxxxxxxxxx
-ADMIN_PASSWORD=buatpasswordkuatdisini
+ADMIN_PASSWORD=\$2b\$12\$isi_dengan_hash_bcrypt
+SESSION_SECRET=isi_dengan_secret_acak_minimal_32_karakter
+```
+
+Buat hash password dengan perintah berikut:
+
+```bash
+node -e "require('bcryptjs').hash('passwordkamu', 12).then(console.log)"
 ```
 
 Test dulu di lokal:
@@ -75,11 +82,12 @@ git push -u origin main
 
 1. Daftar di [vercel.com](https://vercel.com) pakai akun GitHub
 2. Klik **Add New → Project** → pilih repo `reviu-app` yang barusan di-push
-3. Di bagian **Environment Variables**, masukkan 4 variable yang sama seperti di `.env.local`:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Di bagian **Environment Variables**, masukkan variable yang sama seperti di `.env.local`:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `ADMIN_PASSWORD`
+   - `SESSION_SECRET`
 4. Klik **Deploy** → tunggu ~1-2 menit
 5. Vercel kasih kamu URL sementara, misal `reviu-app.vercel.app` — coba buka `/admin` untuk pastikan jalan
 
@@ -113,6 +121,19 @@ git push -u origin main
 1. Buka Google Maps, cari nama bisnis
 2. Klik "Tulis ulasan" atau share tempat itu
 3. Copy link yang muncul — ini yang dimasukkan ke field "Link Tujuan" di dashboard
+
+## Load test lokal/staging
+
+Runner berikut mensimulasikan 5.000 request yang tersebar selama 3 detik. Jalankan
+terhadap staging, bukan production:
+
+```bash
+npm run load-test -- --url https://staging.example.com/ --requests 5000 --duration-ms 3000
+```
+
+Output mencatat status HTTP, network error, throughput, serta latency p50/p95/p99.
+Gunakan URL `/` untuk halaman statis dan URL kode untuk menguji jalur redirect yang
+bergantung pada Supabase.
 
 ## Catatan keamanan
 

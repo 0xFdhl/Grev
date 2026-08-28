@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { checkAuth } from '../../lib/checkAuth';
+import { logSecurityEvent } from '../../lib/securityLog';
 
 const PREFIX_RE = /^[A-Z0-9]{1,10}$/;
 
@@ -15,7 +16,7 @@ export default async function handler(req, res) {
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
     return res.status(200).json(data);
   }
 
@@ -23,6 +24,12 @@ export default async function handler(req, res) {
   // body: { prefix: "RV", count: 20, startFrom: 1 }
   if (req.method === 'POST') {
     const body = req.body || {};
+
+    if (body.website) {
+      await logSecurityEvent({ req, triggeredBy: 'honeypot_field', path: '/api/links' });
+      return res.status(400).json({ error: 'Terjadi kesalahan. Coba lagi.' });
+    }
+
     const prefix = typeof body.prefix === 'string' ? body.prefix.trim().toUpperCase() : '';
     const count = Number(body.count);
     const startFrom = Number(body.startFrom ?? 1);
@@ -55,7 +62,7 @@ export default async function handler(req, res) {
           .status(409)
           .json({ error: 'Ada kode yang sudah terdaftar. Naikkan nomor awal atau ganti prefix.' });
       }
-      return res.status(500).json({ error: error.message });
+      return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
     }
     return res.status(201).json(data);
   }
