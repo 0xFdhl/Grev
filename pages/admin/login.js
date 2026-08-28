@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 
 export default function Login() {
   const [password, setPassword] = useState('');
+  const [honeypot, setHoneypot] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
@@ -14,21 +15,20 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/links', {
-        headers: { Authorization: `Bearer ${password}` },
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password, website: honeypot }),
       });
 
       if (res.ok) {
-        sessionStorage.setItem('reviu_admin_token', password);
         router.push('/admin');
-      } else if (res.status === 401) {
-        setError('Password salah.');
-        setLoading(false);
-      } else {
-        const data = await res.json().catch(() => null);
-        setError((data && data.error) || 'Terjadi kesalahan di server. Coba lagi nanti.');
-        setLoading(false);
+        return;
       }
+
+      const data = await res.json().catch(() => null);
+      setError((data && data.error) || 'Terjadi kesalahan di server. Coba lagi nanti.');
+      setLoading(false);
     } catch (err) {
       setError('Tidak bisa terhubung ke server.');
       setLoading(false);
@@ -50,6 +50,16 @@ export default function Login() {
           <p style={{ margin: '0 0 20px', color: 'var(--color-muted)', fontSize: 14 }}>
             Masukkan password untuk mengelola kode QR.
           </p>
+          <input
+            type="text"
+            name="website"
+            value={honeypot}
+            onChange={(e) => setHoneypot(e.target.value)}
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+            style={{ display: 'none' }}
+          />
           <input
             type="password"
             placeholder="Password admin"

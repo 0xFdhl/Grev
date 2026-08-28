@@ -5,7 +5,6 @@ import { useRouter } from 'next/router';
 const QUICK_COUNTS = [10, 25, 50, 100];
 
 export default function AdminDashboard() {
-  const [token, setToken] = useState(null);
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -22,16 +21,10 @@ export default function AdminDashboard() {
 
   const [copiedCode, setCopiedCode] = useState(null);
 
-  const router = useRouter();
+  const [genHoneypot, setGenHoneypot] = useState('');
+  const [editHoneypot, setEditHoneypot] = useState('');
 
-  useEffect(() => {
-    const t = sessionStorage.getItem('reviu_admin_token');
-    if (!t) {
-      router.push('/admin/login');
-    } else {
-      setToken(t);
-    }
-  }, [router]);
+  const router = useRouter();
 
   useEffect(() => {
     if (!msg) return;
@@ -39,11 +32,16 @@ export default function AdminDashboard() {
     return () => clearTimeout(timer);
   }, [msg]);
 
+  function handleUnauthorized() {
+    router.push('/admin/login');
+  }
+
   async function callApi(url, options = {}) {
-    const res = await fetch(url, {
-      ...options,
-      headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) },
-    });
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+      handleUnauthorized();
+      throw new Error('Sesi berakhir. Silakan login kembali.');
+    }
     let data = null;
     try {
       data = await res.json();
@@ -54,12 +52,14 @@ export default function AdminDashboard() {
     return data;
   }
 
-  const loadLinks = useCallback(async (authToken) => {
+  const loadLinks = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/links', {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
+      const res = await fetch('/api/links');
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error((data && data.error) || `Gagal memuat data (HTTP ${res.status})`);
@@ -70,11 +70,11 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
-    if (token) loadLinks(token);
-  }, [token, loadLinks]);
+    loadLinks();
+  }, [loadLinks]);
 
   const stats = useMemo(() => {
     const total = links.length;
@@ -112,10 +112,15 @@ export default function AdminDashboard() {
       await callApi('/api/links', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prefix: genPrefix, count: Number(genCount), startFrom: nextNumber }),
+        body: JSON.stringify({
+          prefix: genPrefix,
+          count: Number(genCount),
+          startFrom: nextNumber,
+          website: genHoneypot,
+        }),
       });
       setMsg({ type: 'ok', text: `${genCount} kode ${genPrefix} berhasil dibuat.` });
-      await loadLinks(token);
+      await loadLinks();
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
     } finally {
@@ -133,11 +138,11 @@ export default function AdminDashboard() {
       await callApi(`/api/links/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...editForm, is_active: true }),
+        body: JSON.stringify({ ...editForm, is_active: true, website: editHoneypot }),
       });
       setMsg({ type: 'ok', text: 'Kode berhasil diaktivasi.' });
       setEditingId(null);
-      await loadLinks(token);
+      await loadLinks();
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
     }
@@ -151,7 +156,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({ is_active: false }),
       });
       setMsg({ type: 'ok', text: 'Kode dinonaktifkan.' });
-      await loadLinks(token);
+      await loadLinks();
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
     }
@@ -162,14 +167,16 @@ export default function AdminDashboard() {
     try {
       await callApi(`/api/links/${id}`, { method: 'DELETE' });
       setMsg({ type: 'ok', text: 'Kode dihapus.' });
-      await loadLinks(token);
+      await loadLinks();
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
     }
   }
 
-  function logout() {
-    sessionStorage.removeItem('reviu_admin_token');
+  async function logout() {
+    try {
+      await fetch('/api/logout', { method: 'POST' });
+    } catch (_) {}
     router.push('/admin/login');
   }
 
@@ -183,8 +190,6 @@ export default function AdminDashboard() {
       setMsg({ type: 'error', text: 'Gagal menyalin link.' });
     }
   }
-
-  if (!token) return null;
 
   return (
     <>
@@ -229,6 +234,16 @@ export default function AdminDashboard() {
 
         {/* Generate */}
         <div className='card'>
+          <input
+            type='text'
+            name='website'
+            value={genHoneypot}
+            onChange={(e) => setGenHoneypot(e.target.value)}
+            tabIndex={-1}
+            autoComplete='off'
+            aria-hidden='true'
+            style={{ display: 'none' }}
+          />
           <h3 style={{ margin: '0 0 12px' }}>Generate kode baru (pre-cetak QR)</h3>
           <div className='row' style={{ alignItems: 'flex-end' }}>
             <div>
@@ -352,7 +367,7 @@ export default function AdminDashboard() {
         <div className='card'>
           <div className='row row--between' style={{ marginBottom: 14, alignItems: 'center' }}>
             <h3 style={{ margin: 0 }}>Daftar Kode ({filteredLinks.length})</h3>
-            <button onClick={() => loadLinks(token)} className='btn btn--secondary btn--small' disabled={loading}>
+            <button onClick={() => loadLinks()} className='btn btn--secondary btn--small' disabled={loading}>
               {loading ? 'Memuat...' : 'Refresh'}
             </button>
           </div>
@@ -389,6 +404,16 @@ export default function AdminDashboard() {
                             <span className='badge badge--inactive'>Mengedit</span>
                           </td>
                           <td data-label='Nama Bisnis'>
+                            <input
+                              type='text'
+                              name='website'
+                              value={editHoneypot}
+                              onChange={(e) => setEditHoneypot(e.target.value)}
+                              tabIndex={-1}
+                              autoComplete='off'
+                              aria-hidden='true'
+                              style={{ display: 'none' }}
+                            />
                             <input
                               className='input'
                               value={editForm.business_name}
