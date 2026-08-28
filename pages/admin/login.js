@@ -17,12 +17,13 @@ export default function Login() {
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password, website: honeypot }),
       });
 
       if (res.ok) {
-        router.push('/admin');
+        router.replace('/admin');
         return;
       }
 

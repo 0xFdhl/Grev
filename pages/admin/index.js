@@ -33,11 +33,11 @@ export default function AdminDashboard() {
   }, [msg]);
 
   function handleUnauthorized() {
-    router.push('/admin/login');
+    router.replace('/admin/login');
   }
 
   async function callApi(url, options = {}) {
-    const res = await fetch(url, options);
+    const res = await fetch(url, { credentials: 'same-origin', ...options });
     if (res.status === 401) {
       handleUnauthorized();
       throw new Error('Sesi berakhir. Silakan login kembali.');
@@ -55,7 +55,7 @@ export default function AdminDashboard() {
   const loadLinks = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/links');
+      const res = await fetch('/api/links', { credentials: 'same-origin' });
       if (res.status === 401) {
         handleUnauthorized();
         return;
@@ -177,7 +177,7 @@ export default function AdminDashboard() {
     try {
       await fetch('/api/logout', { method: 'POST' });
     } catch (_) {}
-    router.push('/admin/login');
+    router.replace('/admin/login');
   }
 
   async function copyLink(code) {
