@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
+import PlaceQRForm from '../../components/PlaceQRForm';
+import QRModal from '../../components/QRModal';
 
 const QUICK_COUNTS = [10, 25, 50, 100];
 
@@ -20,6 +22,7 @@ export default function AdminDashboard() {
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [copiedCode, setCopiedCode] = useState(null);
+  const [qrCode, setQrCode] = useState(null);
 
   const [genHoneypot, setGenHoneypot] = useState('');
   const [editHoneypot, setEditHoneypot] = useState('');
@@ -230,6 +233,15 @@ export default function AdminDashboard() {
             <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL KLIK</div>
             <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.clicks}</div>
           </div>
+        </div>
+
+        {/* Generate QR review langsung dari Google Maps */}
+        <div className='card'>
+          <h3 style={{ margin: '0 0 4px' }}>Generate QR review dari Google Maps</h3>
+          <p style={{ margin: '0 0 12px', color: 'var(--color-muted)', fontSize: 14 }}>
+            Cari nama cafe, pilih tempat yang benar, QR code review otomatis dibuat dan bisa disimpan.
+          </p>
+          <PlaceQRForm />
         </div>
 
         {/* Generate */}
@@ -488,6 +500,9 @@ export default function AdminDashboard() {
                           </td>
                           <td data-label='Aksi'>
                             <div className='row' style={{ justifyContent: 'flex-end' }}>
+                              <button onClick={() => setQrCode(link.code)} className='btn btn--secondary btn--small'>
+                                QR
+                              </button>
                               <button onClick={() => startEdit(link)} className='btn btn--small'>
                                 {link.is_active ? 'Edit' : 'Aktivasi'}
                               </button>
@@ -513,6 +528,8 @@ export default function AdminDashboard() {
             </div>
           )}
         </div>
+
+        {qrCode && <QRModal code={qrCode} onClose={() => setQrCode(null)} />}
       </div>
     </>
   );
