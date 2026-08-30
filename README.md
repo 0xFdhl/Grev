@@ -46,6 +46,7 @@ SUPABASE_ANON_KEY=xxxxxxxxxxxxxxxxx
 SUPABASE_SERVICE_ROLE_KEY=xxxxxxxxxxxxxxxxx
 ADMIN_PASSWORD=\$2b\$12\$isi_dengan_hash_bcrypt
 SESSION_SECRET=isi_dengan_secret_acak_minimal_32_karakter
+NEXT_PUBLIC_GOOGLE_MAPS_DEMO_KEY=isi_dengan_demo_key_dari_developers.google.com/maps/demo-key
 ```
 
 Buat hash password dengan perintah berikut:
@@ -88,6 +89,7 @@ git push -u origin main
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `ADMIN_PASSWORD`
    - `SESSION_SECRET`
+   - `NEXT_PUBLIC_GOOGLE_MAPS_DEMO_KEY`
 4. Klik **Deploy** → tunggu ~1-2 menit
 5. Vercel kasih kamu URL sementara, misal `reviu-app.vercel.app` — coba buka `/admin` untuk pastikan jalan
 
@@ -121,6 +123,34 @@ git push -u origin main
 1. Buka Google Maps, cari nama bisnis
 2. Klik "Tulis ulasan" atau share tempat itu
 3. Copy link yang muncul — ini yang dimasukkan ke field "Link Tujuan" di dashboard
+
+## Generate QR review langsung dari Google Maps
+
+Selain pre-generate kode pendek, ada form di `/admin` yang bikin QR code review langsung
+dari pencarian tempat di Google Maps:
+
+1. Buka `/admin` → kartu **"Generate QR review dari Google Maps"**
+2. Ketik nama cafe di kolom pencarian (autocomplete dari Google Maps)
+3. Pilih cafe yang benar dari dropdown → sistem ambil **Place ID** + koordinat otomatis
+   (lokasi cafe ditampilkan di peta, bisa di-fullscreen di HP/desktop)
+4. Klik **Simpan & buat QR** → sistem bikin kode unik, lalu QR digenerate dari short link
+   `https://domainkamu.com/{KODE}` yang redirect ke link review
+5. QR muncul → bisa **Download PNG**
+
+Kode baru otomatis masuk ke **Daftar Kode** (status aktif). Karena QR-nya nunjuk ke short
+link (bukan langsung ke Google), kamu bisa **mengubah link tujuan kapan aja** — misal kalau
+owner cafe nolak, kode + akrilik yang sama tinggal dipindah ke cafe lain tanpa cetak ulang.
+Data disimpan ke tabel `links` (kolom `place_id` dipakai sebagai referensi Place ID Google Maps).
+
+**Cara dapetin Maps Demo Key:**
+
+1. Buka [developers.google.com/maps/demo-key](https://developers.google.com/maps/demo-key)
+2. Login akun Google → klik **"Get a Demo Key"** (gratis, tanpa kartu kredit)
+3. Copy key-nya ke `NEXT_PUBLIC_GOOGLE_MAPS_DEMO_KEY` di `.env.local`
+
+> ⚠️ Demo key ini cuma untuk testing/prototyping dan ada limit harian. Kalau traffic
+> sudah besar, upgrade ke API key berbayar dengan billing account, dan pastikan domain
+> kamu stabil — kalau domain ganti, QR akrilik yang sudah tercetak tidak akan jalan lagi.
 
 ## Load test lokal/staging
 

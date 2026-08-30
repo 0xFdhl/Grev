@@ -26,6 +26,12 @@ alter table links enable row level security;
 --     for select using (is_active = true);
 
 
+-- Kolom Place ID buat kode yang dibuat lewat form "Generate QR review dari Google Maps".
+-- Dipakai cuma sebagai metadata (referensi), jadi tidak unique — cafe yang sama boleh
+-- punya lebih dari satu kode/akrilik.
+alter table links add column if not exists place_id text;
+
+
 drop function if exists increment_clicks(text);
 
 create or replace function increment_clicks(p_code text)
