@@ -221,7 +221,7 @@ export default function PlaceQRForm() {
       });
 
       if (res.status === 401) {
-        router.replace('/admin/login');
+        router.replace('/login');
         throw new Error('Sesi berakhir. Silakan login kembali.');
       }
 
