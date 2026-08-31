@@ -1,4 +1,5 @@
 import Head from 'next/head';
+import Link from 'next/link';
 
 export default function Home() {
   return (
@@ -13,9 +14,9 @@ export default function Home() {
           <p style={{ margin: '0 0 20px', color: 'var(--color-muted)' }}>
             Sistem redirect QR/NFC untuk Google Review. Cepat, jelas, dan responsif di ponsel.
           </p>
-          <a href='/admin' className='btn' style={{ width: '100%', textDecoration: 'none' }}>
+          <Link href='/login' className='btn' style={{ width: '100%', textDecoration: 'none' }}>
             Masuk ke Dashboard Admin
-          </a>
+          </Link>
         </div>
       </div>
     </>

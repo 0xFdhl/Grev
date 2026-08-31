@@ -26,6 +26,7 @@ export default function AdminDashboard() {
 
   const [genHoneypot, setGenHoneypot] = useState('');
   const [editHoneypot, setEditHoneypot] = useState('');
+  const [authChecked, setAuthChecked] = useState(false);
 
   const router = useRouter();
 
@@ -36,7 +37,7 @@ export default function AdminDashboard() {
   }, [msg]);
 
   function handleUnauthorized() {
-    router.replace('/admin/login');
+    router.replace('/login');
   }
 
   async function callApi(url, options = {}) {
@@ -72,6 +73,7 @@ export default function AdminDashboard() {
       setMsg({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
+      setAuthChecked(true);
     }
   }, [router]);
 
@@ -180,7 +182,7 @@ export default function AdminDashboard() {
     try {
       await fetch('/api/logout', { method: 'POST' });
     } catch (_) {}
-    router.replace('/admin/login');
+    router.replace('/login');
   }
 
   async function copyLink(code) {
@@ -192,6 +194,21 @@ export default function AdminDashboard() {
     } catch (_) {
       setMsg({ type: 'error', text: 'Gagal menyalin link.' });
     }
+  }
+
+  if (!authChecked) {
+    return (
+      <>
+        <Head>
+          <title>Dashboard Admin | Reviu</title>
+        </Head>
+        <div className='center-page'>
+          <div className='card' style={{ maxWidth: 420, width: '100%', textAlign: 'center' }}>
+            <p style={{ margin: 0, color: 'var(--color-muted)' }}>Memeriksa sesi...</p>
+          </div>
+        </div>
+      </>
+    );
   }
 
   return (
