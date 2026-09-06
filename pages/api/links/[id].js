@@ -27,6 +27,23 @@ export default async function handler(req, res) {
     return res.status(404).json({ error: 'Kode tidak ditemukan.' });
   }
 
+  // PUT { restore: true } -> pulihkan kode dari sampah (clear deleted_at).
+  // is_active & code TIDAK disentuh, jadi QR fisik tetap valid.
+  if (req.method === 'PUT' && (req.body || {}).restore === true) {
+    const { data, error } = await supabaseAdmin
+      .from('links')
+      .update({ deleted_at: null, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .not('deleted_at', 'is', null)
+      .select();
+
+    if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
+    if (!data || data.length === 0) {
+      return res.status(404).json({ error: 'Kode tidak ditemukan di sampah.' });
+    }
+    return res.status(200).json(data[0]);
+  }
+
   if (req.method === 'PUT') {
     const body = req.body || {};
 
@@ -75,10 +92,14 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'DELETE') {
+    // Soft-delete: set deleted_at, JANGAN hapus baris. Kode yang sudah dicetak
+    // fisik bisa dipulihkan kapan aja dari tab Sampah.
+    const now = new Date().toISOString();
     const { data, error } = await supabaseAdmin
       .from('links')
-      .delete()
+      .update({ deleted_at: now, updated_at: now })
       .eq('id', id)
+      .is('deleted_at', null)
       .select();
 
     if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });

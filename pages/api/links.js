@@ -22,13 +22,16 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // GET -> ambil semua data links
+  // GET -> ambil data links. Default: yang BELUM dihapus (soft-delete).
+  // ?trash=1 -> khusus daftar sampah (yang deleted_at terisi), urut terbaru dihapus.
   if (req.method === 'GET') {
-    const { data, error } = await supabaseAdmin
-      .from('links')
-      .select('*')
-      .order('created_at', { ascending: false });
+    let query = supabaseAdmin.from('links').select('*');
+    const wantTrash = req.query.trash === '1' || req.query.trash === 'true';
+    query = wantTrash
+      ? query.not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
+      : query.is('deleted_at', null).order('created_at', { ascending: false });
 
+    const { data, error } = await query;
     if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
     return res.status(200).json(data);
   }

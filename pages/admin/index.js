@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
 import PlaceQRForm from '../../components/PlaceQRForm';
@@ -27,6 +27,12 @@ export default function AdminDashboard() {
   const [genHoneypot, setGenHoneypot] = useState('');
   const [editHoneypot, setEditHoneypot] = useState('');
   const [authChecked, setAuthChecked] = useState(false);
+
+  const [view, setView] = useState('aktif');
+  const [trash, setTrash] = useState([]);
+  const [loadingTrash, setLoadingTrash] = useState(false);
+  const [toast, setToast] = useState(null);
+  const undoTimersRef = useRef(new Map());
 
   const router = useRouter();
 
@@ -80,6 +86,26 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadLinks();
   }, [loadLinks]);
+
+  const loadTrash = useCallback(async () => {
+    setLoadingTrash(true);
+    try {
+      const res = await fetch('/api/links?trash=1', { credentials: 'same-origin' });
+      if (res.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error((data && data.error) || `Gagal memuat sampah (HTTP ${res.status})`);
+      }
+      setTrash(data || []);
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      setLoadingTrash(false);
+    }
+  }, [router]);
 
   const stats = useMemo(() => {
     const total = links.length;
@@ -167,15 +193,62 @@ export default function AdminDashboard() {
     }
   }
 
-  async function removeCode(id) {
-    if (!confirm('Yakin hapus kode ini?')) return;
-    try {
-      await callApi(`/api/links/${id}`, { method: 'DELETE' });
-      setMsg({ type: 'ok', text: 'Kode dihapus.' });
-      await loadLinks();
-    } catch (err) {
-      setMsg({ type: 'error', text: err.message });
+  function removeCode(link) {
+    const id = link.id;
+    if (
+      link.clicks > 0 &&
+      !confirm(
+        `Kode ${link.code} sudah discan ${link.clicks}x di lapangan. Yakin buang ke Sampah?`
+      )
+    ) {
+      return;
     }
+
+    // Optimistic: sembunyikan row dulu (per-id, bukan snapshot array, biar aman
+    // untuk beberapa hapus sekaligus).
+    setLinks((prev) => prev.filter((l) => l.id !== id));
+
+    const timer = setTimeout(async () => {
+      undoTimersRef.current.delete(id);
+      setToast(null);
+      try {
+        await callApi(`/api/links/${id}`, { method: 'DELETE' });
+        setMsg({ type: 'ok', text: `"${link.code}" dipindahkan ke Sampah.` });
+      } catch (err) {
+        setMsg({ type: 'error', text: err.message });
+        loadLinks();
+      }
+    }, 6000);
+    undoTimersRef.current.set(id, timer);
+
+    setToast({
+      text: `"${link.code}" dipindahkan ke Sampah.`,
+      actionLabel: 'Urungkan',
+      onAction: () => {
+        clearTimeout(timer);
+        undoTimersRef.current.delete(id);
+        setToast(null);
+        setLinks((prev) => (prev.some((l) => l.id === id) ? prev : [link, ...prev]));
+      },
+    });
+  }
+
+  function restoreCode(link) {
+    const id = link.id;
+    setTrash((prev) => prev.filter((l) => l.id !== id));
+    callApi(`/api/links/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ restore: true }),
+    })
+      .then((updated) => {
+        setMsg({ type: 'ok', text: `"${link.code}" dipulihkan.` });
+        setLinks((prev) => (prev.some((l) => l.id === id) ? prev : [updated, ...prev]));
+      })
+      .catch((err) => {
+        setMsg({ type: 'error', text: err.message });
+        loadTrash();
+      });
   }
 
   async function logout() {
@@ -252,6 +325,27 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        {/* Tab: Daftar Kode vs Sampah */}
+        <div className='row' style={{ marginBottom: 16, gap: 8 }}>
+          <button
+            onClick={() => setView('aktif')}
+            className={`btn btn--small ${view === 'aktif' ? '' : 'btn--secondary'}`}
+          >
+            Daftar Kode ({stats.total})
+          </button>
+          <button
+            onClick={() => {
+              setView('sampah');
+              loadTrash();
+            }}
+            className={`btn btn--small ${view === 'sampah' ? '' : 'btn--secondary'}`}
+          >
+            Sampah{view === 'sampah' ? ` (${trash.length})` : ''}
+          </button>
+        </div>
+
+        {view === 'aktif' && (
+          <>
         {/* Generate QR review langsung dari Google Maps */}
         <div className='card'>
           <h3 style={{ margin: '0 0 4px' }}>Generate QR review dari Google Maps</h3>
@@ -531,7 +625,7 @@ export default function AdminDashboard() {
                                   Nonaktifkan
                                 </button>
                               )}
-                              <button onClick={() => removeCode(link.id)} className='btn btn--danger btn--small'>
+                              <button onClick={() => removeCode(link)} className='btn btn--danger btn--small'>
                                 Hapus
                               </button>
                             </div>
@@ -545,6 +639,102 @@ export default function AdminDashboard() {
             </div>
           )}
         </div>
+          </>
+        )}
+
+        {view === 'sampah' && (
+          <div className='card'>
+            <div className='row row--between' style={{ marginBottom: 14, alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>Sampah ({trash.length})</h3>
+              <button onClick={() => loadTrash()} className='btn btn--secondary btn--small' disabled={loadingTrash}>
+                {loadingTrash ? 'Memuat...' : 'Refresh'}
+              </button>
+            </div>
+            <p style={{ margin: '0 0 8px', color: 'var(--color-muted)', fontSize: 13 }}>
+              Kode di sini akan dihapus permanen setelah 30 hari. QR fisiknya masih bisa dipulihkan
+              sampai saat itu.
+            </p>
+
+            {loadingTrash ? (
+              <p>Memuat...</p>
+            ) : trash.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--color-muted)' }}>
+                <p style={{ margin: 0, fontWeight: 600 }}>Sampah kosong.</p>
+              </div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table className='data-table'>
+                  <thead>
+                    <tr>
+                      <th>Kode</th>
+                      <th>Nama Bisnis</th>
+                      <th>Klik</th>
+                      <th>Dihapus</th>
+                      <th style={{ minWidth: 120 }}>Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {trash.map((link) => (
+                      <tr key={link.id}>
+                        <td data-label='Kode'>
+                          <code style={{ fontSize: 14, fontWeight: 600 }}>{link.code}</code>
+                        </td>
+                        <td data-label='Nama Bisnis' style={{ fontWeight: 500 }}>
+                          {link.business_name || '-'}
+                        </td>
+                        <td data-label='Klik' style={{ fontWeight: 600 }}>
+                          {link.clicks || 0}
+                        </td>
+                        <td data-label='Dihapus'>
+                          {link.deleted_at ? new Date(link.deleted_at).toLocaleString('id-ID') : '-'}
+                        </td>
+                        <td data-label='Aksi'>
+                          <div className='row' style={{ justifyContent: 'flex-end' }}>
+                            <button onClick={() => restoreCode(link)} className='btn btn--success btn--small'>
+                              Pulihkan
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {toast && (
+          <div
+            style={{
+              position: 'fixed',
+              left: '50%',
+              bottom: 24,
+              transform: 'translateX(-50%)',
+              zIndex: 1000,
+              background: '#111827',
+              color: '#fff',
+              padding: '12px 16px',
+              borderRadius: 10,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              boxShadow: '0 8px 24px rgba(0,0,0,.25)',
+              maxWidth: '92vw',
+            }}
+          >
+            <span style={{ fontSize: 14 }}>{toast.text}</span>
+            {toast.actionLabel && (
+              <button
+                onClick={toast.onAction}
+                className='btn btn--small'
+                style={{ background: '#374151', color: '#fff' }}
+              >
+                {toast.actionLabel}
+              </button>
+            )}
+          </div>
+        )}
 
         {qrCode && <QRModal code={qrCode} onClose={() => setQrCode(null)} />}
       </div>

@@ -23,6 +23,7 @@ export async function getServerSideProps({ params, req, res }) {
     .from('links')
     .select('*')
     .eq('code', code.toUpperCase())
+    .is('deleted_at', null)
     .single();
 
   // Pesan sengaja tidak membedakan "tidak ada" vs "belum aktif"
