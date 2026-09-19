@@ -9,7 +9,7 @@ export async function getServerSideProps({ params, req, res }) {
   const { code } = params;
 
   const ip = getClientIp(req);
-  if (!rateLimit(`redirect:${ip}`, 60, 60 * 1000)) {
+  if (!(await rateLimit(`redirect:${ip}`, 60, 60 * 1000))) {
     res.statusCode = 404;
     return { props: { status: 'invalid' } };
   }

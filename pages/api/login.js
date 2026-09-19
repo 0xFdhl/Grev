@@ -26,7 +26,7 @@ export default async function handler(req, res) {
   }
 
   const ip = getClientIp(req);
-  if (!rateLimit(`login:${ip}`, LOGIN_LIMIT, LOGIN_WINDOW_MS)) {
+  if (!(await rateLimit(`login:${ip}`, LOGIN_LIMIT, LOGIN_WINDOW_MS))) {
     return res.status(429).json({
       error: 'Terlalu banyak percobaan login. Coba lagi dalam 15 menit.',
     });

@@ -47,6 +47,8 @@ SUPABASE_SERVICE_ROLE_KEY=xxxxxxxxxxxxxxxxx
 ADMIN_PASSWORD=\$2b\$12\$isi_dengan_hash_bcrypt
 SESSION_SECRET=isi_dengan_secret_acak_minimal_32_karakter
 NEXT_PUBLIC_GOOGLE_MAPS_DEMO_KEY=isi_dengan_demo_key_dari_developers.google.com/maps/demo-key
+UPSTASH_REDIS_REST_URL=https://xxxxxxxx.upstash.io
+UPSTASH_REDIS_REST_TOKEN=xxxxxxxxxxxxxxxxx
 ```
 
 Buat hash password dengan perintah berikut:
@@ -90,6 +92,8 @@ git push -u origin main
    - `ADMIN_PASSWORD`
    - `SESSION_SECRET`
    - `NEXT_PUBLIC_GOOGLE_MAPS_DEMO_KEY`
+   - `UPSTASH_REDIS_REST_URL`
+   - `UPSTASH_REDIS_REST_TOKEN`
 4. Klik **Deploy** → tunggu ~1-2 menit
 5. Vercel kasih kamu URL sementara, misal `reviu-app.vercel.app` — coba buka `/admin` untuk pastikan jalan
 
@@ -164,6 +168,23 @@ npm run load-test -- --url https://staging.example.com/ --requests 5000 --durati
 Output mencatat status HTTP, network error, throughput, serta latency p50/p95/p99.
 Gunakan URL `/` untuk halaman statis dan URL kode untuk menguji jalur redirect yang
 bergantung pada Supabase.
+
+## Rate limit produksi (Upstash, gratis)
+
+Rate limit (login & redirect) secara default berjalan di memori per-instance — di lokal
+itu cukup, tapi di Vercel setiap instance serverless punya memori sendiri sehingga limit
+login brute-force bisa bocor. Supaya konsisten antar instance, pakai Upstash Redis:
+
+1. Daftar gratis di [upstash.com](https://upstash.com) (login GitHub/Google)
+2. **Create database** → region pilih yang terdekat (misal Singapore) → gratis 500k
+   command/bulan, cukup untuk traffic kecil
+3. Di halaman database, copy **REST URL** dan **Write/Read Token** (kalau token tidak
+   terlihat, pilih "Rotate Token" atau cek tab REST API)
+4. Isi `UPSTASH_REDIS_REST_URL` dan `UPSTASH_REDIS_REST_TOKEN` di `.env.local`
+   dan Environment Variables di Vercel
+
+Jika env itu kosong atau Redis sedang error, app otomatis fallback ke in-memory
+(best-effort) — redirect tidak pernah gagal gara-gara Redis down.
 
 ## Catatan keamanan
 
