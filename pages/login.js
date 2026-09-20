@@ -41,13 +41,15 @@ export default function Login() {
       <Head>
         <title>Login Admin | Reviu</title>
       </Head>
-      <div className="center-page" style={{ background: '#f3f4f6' }}>
+      <div className="center-page login-page">
         <form
           onSubmit={handleSubmit}
-          className="card"
+          className="card login-card"
           style={{ width: '100%', maxWidth: 360, padding: 32 }}
         >
-          <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Login Admin</h1>
+          <span className='brand-mark login-mark' aria-hidden='true'>r.</span>
+          <p className='eyebrow'>REVIU WORKSPACE</p>
+          <h1 style={{ margin: '0 0 8px', fontSize: 24 }}>Selamat datang kembali.</h1>
           <p style={{ margin: '0 0 20px', color: 'var(--color-muted)', fontSize: 14 }}>
             Masukkan password untuk mengelola kode QR.
           </p>
@@ -61,7 +63,10 @@ export default function Login() {
             aria-hidden="true"
             style={{ display: 'none' }}
           />
+          <label className='field-label' htmlFor='admin-password'>Password admin</label>
           <input
+            id='admin-password'
+            autoComplete='current-password'
             type="password"
             placeholder="Password admin"
             value={password}
@@ -75,7 +80,7 @@ export default function Login() {
             {loading ? 'Memeriksa...' : 'Masuk'}
           </button>
           {error && (
-            <div className="alert alert--error" style={{ marginTop: 14, marginBottom: 0 }}>
+            <div role='alert' className="alert alert--error" style={{ marginTop: 14, marginBottom: 0 }}>
               {error}
             </div>
           )}

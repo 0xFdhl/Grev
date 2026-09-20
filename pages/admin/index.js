@@ -3,6 +3,7 @@ import Head from 'next/head';
 import { useRouter } from 'next/router';
 import PlaceQRForm from '../../components/PlaceQRForm';
 import QRModal from '../../components/QRModal';
+import { publicLink } from '../../lib/publicLink';
 
 const QUICK_COUNTS = [10, 25, 50, 100];
 
@@ -17,12 +18,14 @@ export default function AdminDashboard() {
 
   const [genPrefix, setGenPrefix] = useState('RV');
   const [genCount, setGenCount] = useState(10);
+  const [nextNumber, setNextNumber] = useState(1);
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [copiedCode, setCopiedCode] = useState(null);
   const [qrCode, setQrCode] = useState(null);
+  const [createMode, setCreateMode] = useState(null);
 
   const [genHoneypot, setGenHoneypot] = useState('');
   const [editHoneypot, setEditHoneypot] = useState('');
@@ -32,7 +35,8 @@ export default function AdminDashboard() {
   const [trash, setTrash] = useState([]);
   const [loadingTrash, setLoadingTrash] = useState(false);
   const [toast, setToast] = useState(null);
-  const undoTimersRef = useRef(new Map());
+  const pendingChangesRef = useRef(new Set());
+  const [pendingIds, setPendingIds] = useState([]);
 
   const router = useRouter();
 
@@ -115,12 +119,22 @@ export default function AdminDashboard() {
     return { total, active, inactive, clicks };
   }, [links]);
 
-  const nextNumber = useMemo(() => {
-    const nums = links
-      .filter((l) => l.code.startsWith(genPrefix))
-      .map((l) => parseInt(l.code.slice(genPrefix.length), 10) || 0);
-    return nums.length > 0 ? Math.max(...nums) + 1 : 1;
-  }, [links, genPrefix]);
+  // Nomor berikutnya dihitung DI SERVER dari SEMUA kode (aktif + Sampah),
+  // supaya generate tidak bentrok dengan kode lama yang sudah di-trash.
+  const loadNextNumber = useCallback(async (prefix) => {
+    try {
+      const res = await fetch(`/api/links?nextfor=${encodeURIComponent(prefix)}`, {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data && Number.isInteger(data.next)) setNextNumber(data.next);
+    } catch (_) {}
+  }, []);
+
+  useEffect(() => {
+    loadNextNumber(genPrefix);
+  }, [loadNextNumber, genPrefix, links]);
 
   const filteredLinks = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -146,7 +160,6 @@ export default function AdminDashboard() {
         body: JSON.stringify({
           prefix: genPrefix,
           count: Number(genCount),
-          startFrom: nextNumber,
           website: genHoneypot,
         }),
       });
@@ -193,8 +206,9 @@ export default function AdminDashboard() {
     }
   }
 
-  function removeCode(link) {
+  async function removeCode(link) {
     const id = link.id;
+    if (pendingChangesRef.current.has(id)) return;
     if (
       link.clicks > 0 &&
       !confirm(
@@ -204,51 +218,43 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Optimistic: sembunyikan row dulu (per-id, bukan snapshot array, biar aman
-    // untuk beberapa hapus sekaligus).
-    setLinks((prev) => prev.filter((l) => l.id !== id));
-
-    const timer = setTimeout(async () => {
-      undoTimersRef.current.delete(id);
-      setToast(null);
-      try {
-        await callApi(`/api/links/${id}`, { method: 'DELETE' });
-        setMsg({ type: 'ok', text: `"${link.code}" dipindahkan ke Sampah.` });
-      } catch (err) {
-        setMsg({ type: 'error', text: err.message });
-        loadLinks();
-      }
-    }, 6000);
-    undoTimersRef.current.set(id, timer);
-
-    setToast({
-      text: `"${link.code}" dipindahkan ke Sampah.`,
-      actionLabel: 'Urungkan',
-      onAction: () => {
-        clearTimeout(timer);
-        undoTimersRef.current.delete(id);
-        setToast(null);
-        setLinks((prev) => (prev.some((l) => l.id === id) ? prev : [link, ...prev]));
-      },
-    });
+    pendingChangesRef.current.add(id);
+    setPendingIds([...pendingChangesRef.current]);
+    try {
+      // Persist first; only report success once the server confirms soft-delete.
+      await callApi(`/api/links/${id}`, { method: 'DELETE' });
+      setLinks((prev) => prev.filter((l) => l.id !== id));
+      setTrash((prev) => prev.some((l) => l.id === id) ? prev : [{ ...link, deleted_at: new Date().toISOString() }, ...prev]);
+      setToast({ id, text: `"${link.code}" dipindahkan ke Sampah.`, actionLabel: 'Urungkan', onAction: () => restoreCode(link) });
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      pendingChangesRef.current.delete(id);
+      setPendingIds([...pendingChangesRef.current]);
+    }
   }
 
-  function restoreCode(link) {
+  async function restoreCode(link) {
     const id = link.id;
-    setTrash((prev) => prev.filter((l) => l.id !== id));
-    callApi(`/api/links/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ restore: true }),
-    })
-      .then((updated) => {
-        setMsg({ type: 'ok', text: `"${link.code}" dipulihkan.` });
-        setLinks((prev) => (prev.some((l) => l.id === id) ? prev : [updated, ...prev]));
-      })
-      .catch((err) => {
-        setMsg({ type: 'error', text: err.message });
-        loadTrash();
+    if (pendingChangesRef.current.has(id)) return;
+    pendingChangesRef.current.add(id);
+    setPendingIds([...pendingChangesRef.current]);
+    try {
+      const updated = await callApi(`/api/links/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restore: true }),
       });
+      setTrash((prev) => prev.filter((l) => l.id !== id));
+      setLinks((prev) => [updated, ...prev.filter((l) => l.id !== id)]);
+      setToast((current) => current?.id === id ? null : current);
+      setMsg({ type: 'ok', text: `"${link.code}" dipulihkan.` });
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      pendingChangesRef.current.delete(id);
+      setPendingIds([...pendingChangesRef.current]);
+    }
   }
 
   async function logout() {
@@ -259,7 +265,7 @@ export default function AdminDashboard() {
   }
 
   async function copyLink(code) {
-    const url = `${window.location.origin}/${code}`;
+    const url = publicLink(code);
     try {
       await navigator.clipboard.writeText(url);
       setCopiedCode(code);
@@ -290,23 +296,25 @@ export default function AdminDashboard() {
         <title>Dashboard Admin | Reviu</title>
       </Head>
 
-      <div className='container'>
-        <div className='row row--between' style={{ marginBottom: 20, alignItems: 'flex-start' }}>
+      <header className='app-bar'><a className='brand' href='/admin'><span className='brand-mark' aria-hidden='true'>r.</span>reviu<span className='brand-caption'>WORKSPACE</span></a><button onClick={logout} className='btn btn--secondary btn--small'>Keluar</button></header>
+      <main className='container dashboard'>
+        <div className='dashboard-heading'>
           <div>
-            <h1 style={{ margin: '0 0 4px', fontSize: 26 }}>Dashboard Reviu</h1>
+            <p className='eyebrow'>RUANG KERJA ANDA</p>
+            <h1>Setiap scan, lebih dekat.</h1>
             <p style={{ margin: 0, color: 'var(--color-muted)', fontSize: 14 }}>
-              Kelola kode QR/NFC untuk Google Review.
+              Kelola QR bisnis dan bagikan pengalaman terbaiknya.
             </p>
           </div>
-          <button onClick={logout} className='btn btn--secondary btn--small'>
-            Keluar
+          <button onClick={() => { setView('aktif'); setCreateMode(createMode ? null : 'business'); }} className='btn' aria-expanded={Boolean(createMode)} aria-controls='create-panel'>
+            {createMode ? 'Tutup form' : '+ Tambah QR'}
           </button>
         </div>
 
-        {msg && <div className={`alert alert--${msg.type}`}>{msg.text}</div>}
+        {msg && <div role='status' className={`alert alert--${msg.type}`}>{msg.text}</div>}
 
         {/* Statistik */}
-        <div className='row'>
+        <div className='stats-grid'>
           <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
             <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL KODE</div>
             <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.total}</div>
@@ -316,28 +324,30 @@ export default function AdminDashboard() {
             <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-success)' }}>{stats.active}</div>
           </div>
           <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
-            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>BELUM AKTIF</div>
+            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TIDAK AKTIF</div>
             <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--color-warning)' }}>{stats.inactive}</div>
           </div>
           <div className='card' style={{ flex: '1 1 140px', minWidth: 120 }}>
-            <div style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL KLIK</div>
+            <div title='Jumlah akses, bukan jumlah orang unik atau ulasan.' style={{ fontSize: 12, color: 'var(--color-muted)', fontWeight: 600 }}>TOTAL AKSES</div>
             <div style={{ fontSize: 28, fontWeight: 700 }}>{stats.clicks}</div>
           </div>
         </div>
 
         {/* Tab: Daftar Kode vs Sampah */}
-        <div className='row' style={{ marginBottom: 16, gap: 8 }}>
+        <div className='section-tabs'>
           <button
             onClick={() => setView('aktif')}
+            aria-pressed={view === 'aktif'}
             className={`btn btn--small ${view === 'aktif' ? '' : 'btn--secondary'}`}
           >
-            Daftar Kode ({stats.total})
+            Daftar QR <span className='tab-count'>{stats.total}</span>
           </button>
           <button
             onClick={() => {
               setView('sampah');
               loadTrash();
             }}
+            aria-pressed={view === 'sampah'}
             className={`btn btn--small ${view === 'sampah' ? '' : 'btn--secondary'}`}
           >
             Sampah{view === 'sampah' ? ` (${trash.length})` : ''}
@@ -346,17 +356,23 @@ export default function AdminDashboard() {
 
         {view === 'aktif' && (
           <>
+        {createMode && <section className='create-panel' id='create-panel'>
+          <div className='create-intro'><div><p className='eyebrow'>MULAI DARI SINI</p><h2>Satu QR, banyak kemungkinan.</h2><p>Hubungkan bisnis sekarang, atau siapkan kode untuk akrilik berikutnya.</p></div></div>
+          <div className='mode-switch' aria-label='Jenis QR'>
+            <button className='btn btn--secondary' aria-pressed={createMode === 'business'} onClick={() => setCreateMode('business')}>Untuk bisnis</button>
+            <button className='btn btn--secondary' aria-pressed={createMode === 'stock'} onClick={() => setCreateMode('stock')}>Buat stok kode</button>
+          </div>
         {/* Generate QR review langsung dari Google Maps */}
-        <div className='card'>
-          <h3 style={{ margin: '0 0 4px' }}>Generate QR review dari Google Maps</h3>
+        {createMode === 'business' && <div className='card'>
+          <h3 style={{ margin: '0 0 4px' }}>Temukan bisnis di Google Maps</h3>
           <p style={{ margin: '0 0 12px', color: 'var(--color-muted)', fontSize: 14 }}>
-            Cari nama cafe, pilih tempat yang benar, QR code review otomatis dibuat dan bisa disimpan.
+            Cari nama bisnis, pilih tempat yang benar, QR code review otomatis dibuat dan bisa disimpan.
           </p>
-          <PlaceQRForm />
-        </div>
+          <PlaceQRForm onCreated={() => loadLinks()} />
+        </div>}
 
         {/* Generate */}
-        <div className='card'>
+        {createMode === 'stock' && <div className='card stock-form'>
           <input
             type='text'
             name='website'
@@ -367,7 +383,8 @@ export default function AdminDashboard() {
             aria-hidden='true'
             style={{ display: 'none' }}
           />
-          <h3 style={{ margin: '0 0 12px' }}>Generate kode baru (pre-cetak QR)</h3>
+          <h3 style={{ margin: '0 0 12px' }}>Siapkan stok akrilik</h3>
+          <p className='muted'>Cetak QR sekarang. Pasangkan dengan bisnis kapan saja.</p>
           <div className='row' style={{ alignItems: 'flex-end' }}>
             <div>
               <label
@@ -383,6 +400,7 @@ export default function AdminDashboard() {
               </label>
               <input
                 value={genPrefix}
+                aria-label='Prefix kode'
                 onChange={(e) => setGenPrefix(e.target.value.toUpperCase())}
                 className='input'
                 style={{ width: 90, textTransform: 'uppercase' }}
@@ -402,6 +420,7 @@ export default function AdminDashboard() {
               </label>
               <input
                 type='number'
+                aria-label='Jumlah kode'
                 min={1}
                 max={500}
                 value={genCount}
@@ -424,7 +443,7 @@ export default function AdminDashboard() {
                 ))}
               </div>
               <p style={{ margin: 0, fontSize: 13, color: 'var(--color-muted)' }}>
-                Kode berikutnya:{' '}
+                Perkiraan kode berikutnya:{' '}
                 <strong>
                   {genPrefix}
                   {String(nextNumber).padStart(4, '0')}
@@ -432,13 +451,14 @@ export default function AdminDashboard() {
               </p>
             </div>
             <button onClick={handleGenerate} disabled={generating} className='btn'>
-              {generating ? 'Membuat...' : 'Generate'}
+              {generating ? 'Membuat...' : 'Buat kode'}
             </button>
           </div>
-        </div>
+        </div>}
+        </section>}
 
         {/* Filter */}
-        <div className='card'>
+        <div className='card filter-card'>
           <div className='row' style={{ alignItems: 'flex-end' }}>
             <div className='grow'>
               <label
@@ -454,9 +474,10 @@ export default function AdminDashboard() {
               </label>
               <input
                 type='text'
+                aria-label='Cari bisnis atau kode QR'
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder='Ketik RV0001 atau nama bisnis...'
+                placeholder='Cari nama bisnis atau kode QR...'
                 className='input'
               />
             </div>
@@ -474,22 +495,23 @@ export default function AdminDashboard() {
               </label>
               <select
                 value={statusFilter}
+                aria-label='Filter status QR'
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className='input'
                 style={{ width: 150, cursor: 'pointer' }}
               >
                 <option value='all'>Semua</option>
                 <option value='active'>Aktif</option>
-                <option value='inactive'>Belum aktif</option>
+                <option value='inactive'>Tidak aktif</option>
               </select>
             </div>
           </div>
         </div>
 
         {/* Daftar kode */}
-        <div className='card'>
+        <div className='card qr-list'>
           <div className='row row--between' style={{ marginBottom: 14, alignItems: 'center' }}>
-            <h3 style={{ margin: 0 }}>Daftar Kode ({filteredLinks.length})</h3>
+            <div><h2 className='list-title'>QR bisnis Anda <span className='tab-count'>{filteredLinks.length}</span></h2><p className='list-caption'>Siap ditampilkan, dibagikan, dan dipakai lagi.</p></div>
             <button onClick={() => loadLinks()} className='btn btn--secondary btn--small' disabled={loading}>
               {loading ? 'Memuat...' : 'Refresh'}
             </button>
@@ -499,19 +521,19 @@ export default function AdminDashboard() {
             <p>Memuat...</p>
           ) : filteredLinks.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '32px 16px', color: 'var(--color-muted)' }}>
-              <p style={{ margin: 0, fontWeight: 600 }}>Tidak ada kode yang cocok.</p>
-              <p style={{ margin: '4px 0 0', fontSize: 14 }}>Coba ubah pencarian atau filter status.</p>
+              <p style={{ margin: 0, fontWeight: 600 }}>{links.length ? 'Belum ada hasil yang cocok.' : 'QR pertama Anda dimulai di sini.'}</p>
+              <p style={{ margin: '4px 0 16px', fontSize: 14 }}>{links.length ? 'Coba nama lain atau tampilkan semua status.' : 'Tambahkan bisnis atau buat stok kode untuk akrilik Anda.'}</p>
+              <button className='btn btn--secondary' onClick={() => { if (links.length) { setSearch(''); setStatusFilter('all'); } else { setCreateMode('business'); window.scrollTo({ top: 0, behavior: 'smooth' }); } }}>{links.length ? 'Reset pencarian' : '+ Tambah QR'}</button>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table className='data-table'>
                 <thead>
                   <tr>
-                    <th>Kode</th>
+                    <th>Bisnis / kode</th>
                     <th>Status</th>
-                    <th>Nama Bisnis</th>
                     <th>Link Tujuan</th>
-                    <th>Klik</th>
+                    <th>Akses</th>
                     <th style={{ minWidth: 180 }}>Aksi</th>
                   </tr>
                 </thead>
@@ -520,13 +542,8 @@ export default function AdminDashboard() {
                     <tr key={link.id}>
                       {editingId === link.id ? (
                         <>
-                          <td data-label='Kode'>
+                          <td colSpan={2} data-label='Bisnis' className='editing-business'>
                             <code style={{ fontSize: 14, fontWeight: 600 }}>{link.code}</code>
-                          </td>
-                          <td data-label='Status'>
-                            <span className='badge badge--inactive'>Mengedit</span>
-                          </td>
-                          <td data-label='Nama Bisnis'>
                             <input
                               type='text'
                               name='website'
@@ -540,6 +557,7 @@ export default function AdminDashboard() {
                             <input
                               className='input'
                               value={editForm.business_name}
+                              aria-label='Nama bisnis'
                               onChange={(e) => setEditForm({ ...editForm, business_name: e.target.value })}
                               placeholder='Nama bisnis'
                               style={{ minWidth: 140, textAlign: 'left' }}
@@ -549,12 +567,13 @@ export default function AdminDashboard() {
                             <input
                               className='input'
                               value={editForm.target_url}
+                              aria-label='Link tujuan'
                               onChange={(e) => setEditForm({ ...editForm, target_url: e.target.value })}
                               placeholder='https://...'
                               style={{ minWidth: 180, textAlign: 'left' }}
                             />
                           </td>
-                          <td data-label='Klik'>{link.clicks || 0}</td>
+                          <td data-label='Akses'>{link.clicks || 0}</td>
                           <td data-label='Aksi'>
                             <div className='row' style={{ justifyContent: 'flex-end' }}>
                               <button onClick={() => saveActivation(link.id)} className='btn btn--success btn--small'>
@@ -569,7 +588,8 @@ export default function AdminDashboard() {
                       ) : (
                         <>
                           <td data-label='Kode'>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <div className='business-identity'>
+                              <strong>{link.business_name || 'Belum dipasangkan'}</strong>
                               <code style={{ fontSize: 14, fontWeight: 600 }}>{link.code}</code>
                               <button
                                 onClick={() => copyLink(link.code)}
@@ -584,11 +604,8 @@ export default function AdminDashboard() {
                             {link.is_active ? (
                               <span className='badge badge--active'>Aktif</span>
                             ) : (
-                              <span className='badge badge--inactive'>Belum aktif</span>
+                              <span className='badge badge--inactive'>{link.target_url ? 'Dinonaktifkan' : 'Belum dipasang'}</span>
                             )}
-                          </td>
-                          <td data-label='Nama Bisnis' style={{ fontWeight: 500 }}>
-                            {link.business_name || '-'}
                           </td>
                           <td data-label='Link Tujuan'>
                             {link.target_url ? (
@@ -598,25 +615,25 @@ export default function AdminDashboard() {
                                 rel='noreferrer'
                                 style={{ color: '#2563eb', wordBreak: 'break-all' }}
                               >
-                                {link.target_url.length > 32
-                                  ? `${link.target_url.slice(0, 32)}...`
-                                  : link.target_url}
+                                Buka tujuan ↗
                               </a>
                             ) : (
                               '-'
                             )}
                           </td>
-                          <td data-label='Klik' style={{ fontWeight: 600 }}>
+                          <td data-label='Akses' style={{ fontWeight: 600 }}>
                             {link.clicks || 0}
                           </td>
                           <td data-label='Aksi'>
                             <div className='row' style={{ justifyContent: 'flex-end' }}>
-                              <button onClick={() => setQrCode(link.code)} className='btn btn--secondary btn--small'>
-                                QR
+                              <button onClick={() => link.is_active ? setQrCode(link) : startEdit(link)} className='btn btn--small'>
+                                {link.is_active ? 'Lihat QR' : 'Aktivasi'}
                               </button>
+                              <details className='action-menu'><summary className='btn btn--secondary btn--small' aria-label={`Opsi untuk ${link.code}`}>•••</summary><div className='action-menu-items'>
                               <button onClick={() => startEdit(link)} className='btn btn--small'>
-                                {link.is_active ? 'Edit' : 'Aktivasi'}
+                                Edit
                               </button>
+                              {!link.is_active && <button onClick={() => setQrCode(link)} className='btn btn--secondary btn--small'>Lihat QR</button>}
                               {link.is_active && (
                                 <button
                                   onClick={() => deactivate(link.id)}
@@ -625,9 +642,10 @@ export default function AdminDashboard() {
                                   Nonaktifkan
                                 </button>
                               )}
-                              <button onClick={() => removeCode(link)} className='btn btn--danger btn--small'>
-                                Hapus
+                              <button onClick={() => removeCode(link)} disabled={pendingIds.includes(link.id)} className='btn btn--danger btn--small'>
+                                {pendingIds.includes(link.id) ? 'Menyimpan...' : 'Ke Sampah'}
                               </button>
+                              </div></details>
                             </div>
                           </td>
                         </>
@@ -651,8 +669,7 @@ export default function AdminDashboard() {
               </button>
             </div>
             <p style={{ margin: '0 0 8px', color: 'var(--color-muted)', fontSize: 13 }}>
-              Kode di sini akan dihapus permanen setelah 30 hari. QR fisiknya masih bisa dipulihkan
-              sampai saat itu.
+              Kode yang masih ada di sini bisa dipulihkan. Setelah dipulihkan, QR kembali mengikuti status sebelumnya.
             </p>
 
             {loadingTrash ? (
@@ -690,7 +707,7 @@ export default function AdminDashboard() {
                         </td>
                         <td data-label='Aksi'>
                           <div className='row' style={{ justifyContent: 'flex-end' }}>
-                            <button onClick={() => restoreCode(link)} className='btn btn--success btn--small'>
+                            <button onClick={() => restoreCode(link)} disabled={pendingIds.includes(link.id)} className='btn btn--success btn--small'>
                               Pulihkan
                             </button>
                           </div>
@@ -727,17 +744,20 @@ export default function AdminDashboard() {
             {toast.actionLabel && (
               <button
                 onClick={toast.onAction}
+                disabled={pendingIds.includes(toast.id)}
                 className='btn btn--small'
                 style={{ background: '#374151', color: '#fff' }}
               >
                 {toast.actionLabel}
               </button>
             )}
+            <button onClick={() => setToast(null)} className='btn btn--small' aria-label='Tutup notifikasi'>×</button>
           </div>
         )}
 
-        {qrCode && <QRModal code={qrCode} onClose={() => setQrCode(null)} />}
-      </div>
+        <p className='dashboard-footnote'>QR tetap sama, tujuan bisa berubah. Total akses bukan jumlah pengunjung unik atau ulasan.</p>
+        {qrCode && <QRModal code={qrCode.code} businessName={qrCode.business_name} isActive={qrCode.is_active} onClose={() => setQrCode(null)} />}
+      </main>
     </>
   );
 }

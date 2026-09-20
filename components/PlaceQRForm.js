@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/router';
 import QRCode from 'qrcode';
+import { publicLink } from '../lib/publicLink';
 
 // Kunci Maps dibaca dari environment variable (JANGAN di-hardcode).
 // Cara dapetinnya: buka https://developers.google.com/maps/demo-key, login akun Google,
@@ -52,11 +53,15 @@ function sanitizeFilename(value) {
   return (value || 'cafe').replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'cafe';
 }
 
-export default function PlaceQRForm() {
+export default function PlaceQRForm({ onCreated }) {
   const router = useRouter();
   const autocompleteRef = useRef(null);
   const mapDivRef = useRef(null);
   const mapInstanceRef = useRef(null);
+  const selectionRef = useRef(0);
+  const fetchingRef = useRef(false);
+  const savingRef = useRef(false);
+  const requestIdRef = useRef(null);
 
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState('');
@@ -111,7 +116,18 @@ export default function PlaceQRForm() {
 
     async function handleSelect(event) {
       const { placePrediction } = event;
-      if (!placePrediction) return;
+      if (!placePrediction || savingRef.current) return;
+
+      const selection = ++selectionRef.current;
+      fetchingRef.current = true;
+      requestIdRef.current = null;
+      setName('');
+      setPlaceId('');
+      setReviewLink('');
+      setLocation(null);
+      setCode('');
+      setShortLink('');
+      setQrDataUrl('');
 
       setFetching(true);
       setMsg(null);
@@ -119,6 +135,7 @@ export default function PlaceQRForm() {
         // Ambil detail place: nama + Place ID + koordinat (buat ditampilkan di peta)
         const place = placePrediction.toPlace();
         await place.fetchFields({ fields: ['displayName', 'id', 'location'] });
+        if (selection !== selectionRef.current) return;
 
         const displayName = place.displayName || '';
         const id = place.id || '';
@@ -132,7 +149,7 @@ export default function PlaceQRForm() {
         const lng = place.location ? place.location.lng() : null;
 
         // Generate link review dari Place ID
-        const link = `https://search.google.com/local/writereview?placeid=${id}`;
+        const link = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(id)}`;
 
         // Reset hasil simpan sebelumnya, simpan data tempat terpilih
         setName(displayName);
@@ -144,14 +161,20 @@ export default function PlaceQRForm() {
         setQrDataUrl('');
         setIsFullscreen(false);
       } catch (err) {
-        setMsg({ type: 'error', text: err.message || 'Gagal mengambil data tempat.' });
+        if (selection === selectionRef.current) setMsg({ type: 'error', text: err.message || 'Gagal mengambil data tempat.' });
       } finally {
-        setFetching(false);
+        if (selection === selectionRef.current) {
+          fetchingRef.current = false;
+          setFetching(false);
+        }
       }
     }
 
     el.addEventListener('gmp-select', handleSelect);
-    return () => el.removeEventListener('gmp-select', handleSelect);
+    return () => {
+      selectionRef.current++;
+      el.removeEventListener('gmp-select', handleSelect);
+    };
   }, [ready]);
 
   // 3) Buat peta + marker begitu cafe terpilih (ada koordinat). Dipakai legacy Marker
@@ -201,18 +224,31 @@ export default function PlaceQRForm() {
   }, [isFullscreen]);
 
   // Simpan cafe ke tabel links (kode auto-generated di server), lalu buat QR dari
-  // short link {origin}/{code} supaya klik terhitung & bisa di-repoint ke cafe lain
+  // short link domain publik supaya klik terhitung & bisa di-repoint ke cafe lain
   // tanpa cetak ulang akrilik. Auth pakai cookie session (bukan token manual).
   async function handleSave() {
+    if (savingRef.current || fetchingRef.current || !placeId || !name) return;
+    savingRef.current = true;
     setSaving(true);
     setMsg(null);
     try {
+      const fingerprint = JSON.stringify([name, placeId]);
+      // Keep an uncertain save across reloads in this tab. No credentials stored.
+      try {
+        const pending = JSON.parse(sessionStorage.getItem('reviu-pending-cafe') || 'null');
+        if (pending?.fingerprint === fingerprint) requestIdRef.current = pending.requestId;
+      } catch (_) {}
+      if (!requestIdRef.current) requestIdRef.current = crypto.randomUUID();
+      try {
+        sessionStorage.setItem('reviu-pending-cafe', JSON.stringify({ fingerprint, requestId: requestIdRef.current }));
+      } catch (_) {}
       const res = await fetch('/api/links', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'cafe',
+          request_id: requestIdRef.current,
           business_name: name,
           target_url: reviewLink,
           place_id: placeId,
@@ -231,16 +267,19 @@ export default function PlaceQRForm() {
       }
 
       const newCode = data.code;
-      const link = `${window.location.origin}/${newCode}`;
-      const dataUrl = await QRCode.toDataURL(link);
+      onCreated?.(data);
+      const link = publicLink(newCode);
+      const dataUrl = await QRCode.toDataURL(link, { width: 960, margin: 4, errorCorrectionLevel: 'M' });
 
       setCode(newCode);
       setShortLink(link);
       setQrDataUrl(dataUrl);
+      try { sessionStorage.removeItem('reviu-pending-cafe'); } catch (_) {}
       setMsg({ type: 'ok', text: `Kode ${newCode} dibuat. QR siap diunduh.` });
     } catch (err) {
       setMsg({ type: 'error', text: err.message });
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -254,7 +293,7 @@ export default function PlaceQRForm() {
       )}
 
       {ready && (
-        <gmp-place-autocomplete ref={autocompleteRef} placeholder='Cari nama cafe...' />
+        <gmp-place-autocomplete ref={autocompleteRef} disabled={saving ? '' : undefined} placeholder='Cari nama bisnis...' aria-label='Cari bisnis di Google Maps' />
       )}
 
       {/* Honeypot anti-bot (konsisten dengan form lain di dashboard) */}
@@ -379,7 +418,7 @@ export default function PlaceQRForm() {
             </>
           ) : (
             <div className='row'>
-              <button onClick={handleSave} disabled={saving} className='btn btn--success'>
+              <button onClick={handleSave} disabled={saving || fetching || !placeId} className='btn btn--success'>
                 {saving ? 'Menyimpan...' : 'Simpan & buat QR'}
               </button>
             </div>

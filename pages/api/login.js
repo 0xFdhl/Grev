@@ -6,6 +6,8 @@ import { logSecurityEvent } from '../../lib/securityLog';
 
 const LOGIN_LIMIT = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const BCRYPT_RE = /^\$2[aby]\$\d{2}\$/;
+let configErrorLogged = false;
 
 async function verifyPassword(password) {
   const expected = process.env.ADMIN_PASSWORD;
@@ -13,7 +15,15 @@ async function verifyPassword(password) {
     return false;
   }
 
-  if (!/^\$2[aby]\$\d{2}\$/.test(expected)) {
+  if (!BCRYPT_RE.test(expected)) {
+    if (!configErrorLogged) {
+      configErrorLogged = true;
+      console.error(
+        '[login] ADMIN_PASSWORD belum berupa hash bcrypt — generate dengan:\n' +
+          '  node -e "require(\'bcryptjs\').hash(\'passwordkamu\', 12).then(console.log)"\n' +
+          'lalu set hasilnya di ADMIN_PASSWORD (.env.local / env Vercel).'
+      );
+    }
     return false;
   }
 

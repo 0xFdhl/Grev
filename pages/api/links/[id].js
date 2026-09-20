@@ -27,23 +27,7 @@ export default async function handler(req, res) {
     return res.status(404).json({ error: 'Kode tidak ditemukan.' });
   }
 
-  // PUT { restore: true } -> pulihkan kode dari sampah (clear deleted_at).
-  // is_active & code TIDAK disentuh, jadi QR fisik tetap valid.
-  if (req.method === 'PUT' && (req.body || {}).restore === true) {
-    const { data, error } = await supabaseAdmin
-      .from('links')
-      .update({ deleted_at: null, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .not('deleted_at', 'is', null)
-      .select();
-
-    if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
-    if (!data || data.length === 0) {
-      return res.status(404).json({ error: 'Kode tidak ditemukan di sampah.' });
-    }
-    return res.status(200).json(data[0]);
-  }
-
+  // PUT -> dua mode: { restore: true } (pulihkan dari sampah) atau edit biasa.
   if (req.method === 'PUT') {
     const body = req.body || {};
 
@@ -52,7 +36,35 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Terjadi kesalahan. Coba lagi.' });
     }
 
-    const { business_name, target_url, is_active } = body;
+    // Mode restore: pulihkan kode dari sampah (clear deleted_at).
+    // is_active & code TIDAK disentuh, jadi QR fisik tetap valid.
+    if (body.restore === true) {
+      const { data, error } = await supabaseAdmin
+        .from('links')
+        .update({ deleted_at: null, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .not('deleted_at', 'is', null)
+        .select();
+
+      if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
+      if (!data || data.length === 0) {
+        return res.status(404).json({ error: 'Kode tidak ditemukan di sampah.' });
+      }
+      return res.status(200).json(data[0]);
+    }
+
+    const { business_name, is_active } = body;
+    const target_url = typeof body.target_url === 'string' ? body.target_url.trim() : body.target_url;
+
+    if (is_active !== undefined && typeof is_active !== 'boolean') {
+      return res.status(400).json({ error: 'Status aktif harus berupa boolean.' });
+    }
+
+    // Emptying a URL must deactivate the row in the SAME update. This avoids a
+    // read-then-write race with another tab activating the same code.
+    if (target_url === '' && is_active !== false) {
+      return res.status(400).json({ error: 'Nonaktifkan kode saat mengosongkan link tujuan.' });
+    }
 
     if (business_name !== undefined) {
       if (typeof business_name !== 'string' || business_name.length > MAX_BUSINESS_NAME) {

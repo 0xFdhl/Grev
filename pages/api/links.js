@@ -1,9 +1,13 @@
-import { randomInt } from 'crypto';
+import { randomInt, createHash } from 'crypto';
 import { supabaseAdmin } from '../../lib/supabaseAdmin';
 import { checkAuth } from '../../lib/checkAuth';
 import { logSecurityEvent } from '../../lib/securityLog';
+import { nextStockNumber, createStockCodes } from '../../lib/stockCodes';
 
 const PREFIX_RE = /^[A-Z0-9]{1,10}$/;
+const MAX_BUSINESS_NAME = 200;
+const MAX_TARGET_URL = 2048;
+const MAX_PLACE_ID = 200;
 
 // Charset buat kode acak (tanpa huruf/angka yang gampang ketuker: I, O, 0, 1)
 const CODE_CHARSET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -18,22 +22,51 @@ function randomCode(len = 8) {
 }
 
 export default async function handler(req, res) {
+  res.setHeader('Cache-Control', 'private, no-store');
   if (!checkAuth(req)) {
     return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // GET ?nextfor=RV -> nomor urut berikutnya untuk prefix tsb.
+  // Penting: dihitung dari SEMUA kode (termasuk yang ada di Sampah), supaya
+  // generate pre-cetak tidak bentrok dengan kode lama yang sudah di-trash.
+  if (req.method === 'GET' && typeof req.query.nextfor === 'string') {
+    const prefix = req.query.nextfor.trim().toUpperCase();
+    if (!PREFIX_RE.test(prefix)) {
+      return res.status(400).json({ error: 'Prefix harus 1-10 karakter huruf/angka.' });
+    }
+
+    try {
+      return res.status(200).json({ next: await nextStockNumber(supabaseAdmin, prefix) });
+    } catch (_) {
+      return res.status(503).json({ error: 'Nomor stok belum bisa dimuat. Coba lagi.' });
+    }
   }
 
   // GET -> ambil data links. Default: yang BELUM dihapus (soft-delete).
   // ?trash=1 -> khusus daftar sampah (yang deleted_at terisi), urut terbaru dihapus.
   if (req.method === 'GET') {
-    let query = supabaseAdmin.from('links').select('*');
     const wantTrash = req.query.trash === '1' || req.query.trash === 'true';
-    query = wantTrash
-      ? query.not('deleted_at', 'is', null).order('deleted_at', { ascending: false })
-      : query.is('deleted_at', null).order('created_at', { ascending: false });
-
-    const { data, error } = await query;
-    if (error) return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
-    return res.status(200).json(data);
+    const rows = [];
+    let cursor;
+    try {
+      // Keyset pagination avoids database row caps and shifting offsets.
+      while (true) {
+        let query = supabaseAdmin.from('links').select('*').order('id', { ascending: true }).limit(500);
+        query = wantTrash ? query.not('deleted_at', 'is', null) : query.is('deleted_at', null);
+        if (cursor) query = query.gt('id', cursor);
+        const { data, error } = await query;
+        if (error) throw error;
+        if (!data?.length) break;
+        rows.push(...data);
+        cursor = data[data.length - 1].id;
+      }
+      const field = wantTrash ? 'deleted_at' : 'created_at';
+      rows.sort((a, b) => String(b[field]).localeCompare(String(a[field])));
+      return res.status(200).json(rows);
+    } catch (_) {
+      return res.status(503).json({ error: 'Daftar belum bisa dimuat lengkap. Coba lagi.' });
+    }
   }
 
   // POST (mode "cafe") -> buat satu kode dari hasil pencarian Google Maps.
@@ -49,11 +82,24 @@ export default async function handler(req, res) {
     }
 
     const businessName = typeof body.business_name === 'string' ? body.business_name.trim() : '';
-    const targetUrl = typeof body.target_url === 'string' ? body.target_url.trim() : '';
     const placeId = typeof body.place_id === 'string' ? body.place_id.trim() : '';
+    const targetUrl = placeId ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}` : '';
+    const requestId = body.request_id;
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId))) {
+      return res.status(400).json({ error: 'ID permintaan tidak valid.' });
+    }
 
     if (!businessName || !targetUrl || !placeId) {
       return res.status(400).json({ error: 'Nama, Place ID, dan link review wajib diisi.' });
+    }
+    if (businessName.length > MAX_BUSINESS_NAME) {
+      return res.status(400).json({ error: `Nama bisnis maksimal ${MAX_BUSINESS_NAME} karakter.` });
+    }
+    if (targetUrl.length > MAX_TARGET_URL) {
+      return res.status(400).json({ error: `Link review maksimal ${MAX_TARGET_URL} karakter.` });
+    }
+    if (placeId.length > MAX_PLACE_ID) {
+      return res.status(400).json({ error: `Place ID maksimal ${MAX_PLACE_ID} karakter.` });
     }
     if (!/^https:\/\/search\.google\.com\/local\/writereview\?placeid=/.test(targetUrl)) {
       return res.status(400).json({ error: 'Link review tidak valid.' });
@@ -61,7 +107,10 @@ export default async function handler(req, res) {
 
     // Auto-generate kode unik. Kalau kebetulan bentrok (sangat jarang), coba kode lain.
     for (let attempt = 0; attempt < 5; attempt++) {
-      const code = randomCode();
+      // A retry uses the same unique code, without a migration or overwriting rows.
+      const code = requestId
+        ? createHash('sha256').update(`cafe:${requestId.toLowerCase()}`).digest('hex').slice(0, 20).toUpperCase()
+        : randomCode();
       const { data, error } = await supabaseAdmin
         .from('links')
         .insert({ code, business_name: businessName, target_url: targetUrl, place_id: placeId, is_active: true })
@@ -69,6 +118,16 @@ export default async function handler(req, res) {
 
       if (!error) {
         return res.status(201).json(data[0]);
+      }
+      if (requestId && error.code === '23505') {
+        const existing = await supabaseAdmin.from('links').select('*').eq('code', code).maybeSingle();
+        if (existing.error) return res.status(503).json({ error: 'Belum bisa memastikan hasil simpan. Coba lagi.' });
+        const row = existing.data;
+        if (row && !row.deleted_at && row.is_active && row.place_id === placeId &&
+            row.business_name === businessName && row.target_url === targetUrl) {
+          return res.status(200).json(row);
+        }
+        return res.status(409).json({ error: 'Permintaan ini sudah digunakan dan datanya berubah. Periksa daftar QR.' });
       }
       if (error.code !== '23505') {
         return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
@@ -79,7 +138,7 @@ export default async function handler(req, res) {
   }
 
   // POST -> generate banyak kode sekaligus (buat pre-cetak QR sebelum ada pelanggan)
-  // body: { prefix: "RV", count: 20, startFrom: 1 }
+  // body: { prefix: "RV", count: 20 }. Server owns allocation, not the preview.
   if (req.method === 'POST') {
     const body = req.body || {};
 
@@ -90,7 +149,6 @@ export default async function handler(req, res) {
 
     const prefix = typeof body.prefix === 'string' ? body.prefix.trim().toUpperCase() : '';
     const count = Number(body.count);
-    const startFrom = Number(body.startFrom ?? 1);
 
     if (!PREFIX_RE.test(prefix)) {
       return res.status(400).json({ error: 'Prefix harus 1-10 karakter huruf/angka.' });
@@ -98,31 +156,19 @@ export default async function handler(req, res) {
     if (!Number.isInteger(count) || count < 1 || count > 500) {
       return res.status(400).json({ error: 'Jumlah kode harus angka bulat 1-500.' });
     }
-    if (!Number.isInteger(startFrom) || startFrom < 1) {
-      return res.status(400).json({ error: 'Nomor awal (startFrom) harus angka bulat >= 1.' });
-    }
-
-    const rows = [];
-    for (let i = 0; i < count; i++) {
-      const number = String(startFrom + i).padStart(4, '0');
-      rows.push({ code: `${prefix}${number}`, is_active: false });
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('links')
-      .insert(rows)
-      .select();
-
-    if (error) {
-      // 23505 = unique violation -> kode sudah pernah dibuat
-      if (error.code === '23505') {
-        return res
-          .status(409)
-          .json({ error: 'Ada kode yang sudah terdaftar. Naikkan nomor awal atau ganti prefix.' });
+    try {
+      const { data, error } = await createStockCodes(supabaseAdmin, prefix, count);
+      if (error?.code === 'STOCK_LIMIT') {
+        return res.status(400).json({ error: 'Nomor stok sudah penuh. Gunakan prefix baru.' });
       }
-      return res.status(500).json({ error: 'Terjadi kesalahan di server.' });
+      if (error?.code === 'STOCK_BUSY') {
+        return res.status(409).json({ error: 'Stok sedang dibuat di tab lain. Coba lagi.' });
+      }
+      if (error) return res.status(503).json({ error: 'Gagal menyimpan stok. Coba lagi.' });
+      return res.status(201).json(data);
+    } catch (_) {
+      return res.status(503).json({ error: 'Gagal memuat nomor stok. Coba lagi.' });
     }
-    return res.status(201).json(data);
   }
 
   return res.status(405).json({ error: 'Method not allowed' });
