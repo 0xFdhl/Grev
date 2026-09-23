@@ -12,7 +12,7 @@ Kode, tujuan, nama bisnis, hitungan akses, dan data Sampah lama tidak ditulis ul
 oleh proses build/deploy. QR dan NFC lama tetap memakai route `/{code}` yang sama.
 
 - Link salin/QR baru memakai `NEXT_PUBLIC_SITE_URL`, dengan default
-  `https://bebetterdevelo.online`, bukan domain preview atau localhost.
+  `https://bebetterdevelo.my.id`, bukan domain preview atau localhost.
   Ubah hanya setelah domain baru terhubung, lalu rebuild/deploy.
 - Pembuatan stok hanya melakukan INSERT; tidak memakai UPSERT atau mengganti row
   lama. Nomor dari Sampah tetap dicadangkan. Konflik antar-tab ditangani dengan

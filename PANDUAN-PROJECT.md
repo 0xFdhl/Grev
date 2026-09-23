@@ -120,10 +120,10 @@ Lihat `.env.example` untuk daftar variabel tanpa rahasia. Yang utama:
   isi dengan key produksi yang sesuai dan batasi pemakaian berdasarkan domain/API.
 - `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`: pembatas bersama.
 - `REDIRECT_RATE_LIMIT_PER_MINUTE`: opsional, default 1200.
-- `NEXT_PUBLIC_SITE_URL`: origin HTTPS tanpa path/query, default domain lama
-  `https://bebetterdevelo.online`. Konfigurasi tidak valid menggagalkan build.
+- `NEXT_PUBLIC_SITE_URL`: origin HTTPS tanpa path/query, default domain produksi
+  `https://bebetterdevelo.my.id`. Konfigurasi tidak valid menggagalkan build.
 
-Untuk pindah ke `.my.id`: beli nama pilihan Anda, hubungkan DNS dan HTTPS ke aplikasi,
+Untuk menggunakan `bebetterdevelo.my.id`, hubungkan DNS dan HTTPS ke aplikasi,
 uji route kode pada domain baru, atur `NEXT_PUBLIC_SITE_URL`, lalu build/deploy ulang.
 Variabel NEXT_PUBLIC dibekukan saat build. Mengubah variabel saja tidak memperbarui
 bundle yang telah di-deploy. Jangan isi domain yang belum dimiliki/terhubung.

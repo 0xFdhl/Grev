@@ -50,7 +50,7 @@ function response() {
 }
 
 test('QR and NFC always use the permanent production origin', () => {
-  assert.equal(publicLink('SVFXXCCY'), 'https://bebetterdevelo.online/SVFXXCCY');
+  assert.equal(publicLink('SVFXXCCY'), 'https://bebetterdevelo.my.id/SVFXXCCY');
   for (const file of ['pages/admin/index.js', 'components/QRModal.js', 'components/PlaceQRForm.js']) {
     const content = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
     assert.match(content, /publicLink\(/);

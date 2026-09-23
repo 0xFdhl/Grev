@@ -66,7 +66,7 @@ const fs = require('node:fs');
       await page.getByRole('button', { name: 'Reset pencarian' }).click();
       await page.getByRole('button', { name: 'Lihat QR', exact: true }).first().click();
       await page.getByRole('dialog').getByRole('img').waitFor();
-      assert.equal(await page.getByRole('link', { name: 'Tes QR' }).getAttribute('href'), 'https://bebetterdevelo.online/SVFXXCCY');
+      assert.equal(await page.getByRole('link', { name: 'Tes QR' }).getAttribute('href'), 'https://bebetterdevelo.my.id/SVFXXCCY');
       await page.getByRole('button', { name: 'Mode presentasi' }).click();
       await page.screenshot({ path: path.join(output, `presentation-${width}.png`), fullPage: true });
       await page.keyboard.press('Escape');
